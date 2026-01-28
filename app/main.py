@@ -47,7 +47,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         # 初始化 LangGraph Checkpointer
         print("🔧 初始化 LangGraph Checkpointer...")
         await setup_checkpointer()
-        print("✅ Checkpointer 表结构已创建/验证")
         
         print(f"✅ {settings.app_name} 启动成功!")
         print(f"📖 API 文档: http://localhost:8000/docs")

@@ -8,13 +8,10 @@ import hashlib
 
 
 class MockImageService:
-    """Mock 图片生成服务类"""
+    """Mock 图片生成服务类 - 接口与 ImageService 保持一致"""
     
     # 占位图片服务基础 URL
     PLACEHOLDER_BASE_URL = "https://via.placeholder.com"
-    
-    # 模拟模型名称，用于调试
-    model = "mock-image-model"
     
     # size 字符串到像素尺寸的映射
     SIZE_MAPPING = {
@@ -26,8 +23,11 @@ class MockImageService:
         "landscape": (1920, 1080),
     }
     
-    @staticmethod
-    def _parse_size(size: str) -> Tuple[int, int]:
+    def __init__(self):
+        # 模拟模型名称，用于调试（与 ImageService 保持一致的实例属性）
+        self.model = "mock-image-model"
+    
+    def _parse_size(self, size: str) -> Tuple[int, int]:
         """
         解析 size 字符串为宽高像素值
         
@@ -42,8 +42,8 @@ class MockImageService:
             (width, height) 元组
         """
         # 先检查预设值
-        if size.lower() in MockImageService.SIZE_MAPPING:
-            return MockImageService.SIZE_MAPPING[size.lower()]
+        if size.lower() in self.SIZE_MAPPING:
+            return self.SIZE_MAPPING[size.lower()]
         
         # 尝试解析 "宽x高" 格式
         if "x" in size.lower():
@@ -56,8 +56,8 @@ class MockImageService:
         # 默认返回 2k 尺寸
         return (2048, 1536)
     
-    @staticmethod
     async def generate_images(
+        self,
         visual_points: List[str],
         size: str = "2k",
     ) -> List[str]:
@@ -78,7 +78,7 @@ class MockImageService:
         colors = ["3498db", "e74c3c", "2ecc71", "9b59b6", "f39c12"]
         
         # 解析尺寸
-        width, height = MockImageService._parse_size(size)
+        width, height = self._parse_size(size)
         size_str = f"{width}x{height}"
         
         for i, point in enumerate(visual_points):
@@ -89,14 +89,14 @@ class MockImageService:
             # 生成占位图片 URL
             # 格式: https://via.placeholder.com/{size}/{color}/ffffff?text={text}
             text = f"Image_{i+1}_{hash_id}"
-            url = f"{MockImageService.PLACEHOLDER_BASE_URL}/{size_str}/{color}/ffffff?text={text}"
+            url = f"{self.PLACEHOLDER_BASE_URL}/{size_str}/{color}/ffffff?text={text}"
             
             image_urls.append(url)
         
         return image_urls
     
-    @staticmethod
     async def generate_single_image(
+        self,
         prompt: str,
         size: str = "2k",
     ) -> str:
@@ -114,10 +114,10 @@ class MockImageService:
         await asyncio.sleep(0.5)
         
         # 解析尺寸
-        width, height = MockImageService._parse_size(size)
+        width, height = self._parse_size(size)
         
         hash_id = hashlib.md5(prompt.encode()).hexdigest()[:8]
-        url = f"{MockImageService.PLACEHOLDER_BASE_URL}/{width}x{height}/3498db/ffffff?text={hash_id}"
+        url = f"{self.PLACEHOLDER_BASE_URL}/{width}x{height}/3498db/ffffff?text={hash_id}"
         
         return url
 
