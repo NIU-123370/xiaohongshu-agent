@@ -4,7 +4,7 @@
 """
 from typing import Dict, Any
 from app.graph.state import AgentState
-from app.services.llm_mock import mock_llm_service
+from app.services import get_llm_service
 
 
 async def write_draft_node(state: AgentState) -> Dict[str, Any]:
@@ -36,8 +36,9 @@ async def write_draft_node(state: AgentState) -> Dict[str, Any]:
         if review_feedback:
             revision_count += 1
         
-        # 调用 Mock LLM 服务生成文章
-        article_content = await mock_llm_service.write_draft(
+        # 获取 LLM 服务（根据配置自动选择真实API或Mock）
+        llm_service = get_llm_service()
+        article_content = await llm_service.write_draft(
             topic=selected_topic,
             feedback=review_feedback,
             revision_count=revision_count

@@ -20,6 +20,7 @@ from app.core.config import settings
 from app.core.db import init_db, close_db
 from app.graph.utils import setup_checkpointer, close_checkpointer
 from app.api.v1.workflow import router as workflow_router
+from app.api.v1.image import router as image_router
 
 
 @asynccontextmanager
@@ -106,6 +107,7 @@ app.add_middleware(
 
 # 注册路由
 app.include_router(workflow_router, prefix="/api/v1")
+app.include_router(image_router, prefix="/api/v1")
 
 
 @app.get("/")

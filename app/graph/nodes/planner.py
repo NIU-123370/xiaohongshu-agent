@@ -4,7 +4,7 @@
 """
 from typing import Dict, Any
 from app.graph.state import AgentState
-from app.services.llm_mock import mock_llm_service
+from app.services import get_llm_service
 
 
 async def plan_topics_node(state: AgentState) -> Dict[str, Any]:
@@ -22,8 +22,9 @@ async def plan_topics_node(state: AgentState) -> Dict[str, Any]:
     topic_direction = state.get("topic_direction", "")
     
     try:
-        # 调用 Mock LLM 服务生成选题
-        generated_topics = await mock_llm_service.plan_topics(topic_direction)
+        # 获取 LLM 服务（根据配置自动选择真实API或Mock）
+        llm_service = get_llm_service()
+        generated_topics = await llm_service.plan_topics(topic_direction)
         
         return {
             "generated_topics": generated_topics,

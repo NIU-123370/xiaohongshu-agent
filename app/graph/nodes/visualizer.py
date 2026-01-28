@@ -4,8 +4,7 @@
 """
 from typing import Dict, Any
 from app.graph.state import AgentState
-from app.services.llm_mock import mock_llm_service
-from app.services.image_mock import mock_image_service
+from app.services import get_llm_service, get_image_service
 
 
 async def extract_visuals_node(state: AgentState) -> Dict[str, Any]:
@@ -30,8 +29,9 @@ async def extract_visuals_node(state: AgentState) -> Dict[str, Any]:
         }
     
     try:
-        # 调用 Mock LLM 服务提取视觉要点
-        visual_points = await mock_llm_service.extract_visual_points(article_content)
+        # 获取 LLM 服务（根据配置自动选择真实API或Mock）
+        llm_service = get_llm_service()
+        visual_points = await llm_service.extract_visual_points(article_content)
         
         return {
             "visual_points": visual_points,
@@ -69,8 +69,9 @@ async def generate_images_node(state: AgentState) -> Dict[str, Any]:
         }
     
     try:
-        # 调用 Mock 图片服务生成配图
-        image_urls = await mock_image_service.generate_images(visual_points)
+        # 获取图片服务（目前使用Mock，后续可接入真实API）
+        image_service = get_image_service()
+        image_urls = await image_service.generate_images(visual_points)
         
         return {
             "image_urls": image_urls,
