@@ -32,7 +32,7 @@ async def extract_visuals_node(state: AgentState) -> Dict[str, Any]:
     
     with MetricsContext("extract_visuals") as tracker:
         try:
-            # 获取 LLM 服务（根据配置自动选择真实API或Mock）
+            # 获取 LLM 服务
             llm_service = get_llm_service()
             visual_points, usage_info = await llm_service.extract_visual_points(article_content)
             
@@ -86,7 +86,7 @@ async def generate_images_node(state: AgentState) -> Dict[str, Any]:
     
     with MetricsContext("generate_images") as tracker:
         try:
-            # 获取图片服务（目前使用Mock，后续可接入真实API）
+            # 获取图片服务
             image_service = get_image_service()
             image_urls = await image_service.generate_images(visual_points)
             

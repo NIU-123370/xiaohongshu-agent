@@ -1,61 +1,45 @@
 """
 数据库连接模块
 配置 SQLAlchemy AsyncSession
-
-注意：当前使用 Mock 模式，不连接真实数据库
-生产环境请取消注释并配置真实数据库连接
 """
-from typing import AsyncGenerator, Optional
+from typing import AsyncGenerator
 
-# 是否使用 Mock 模式
-USE_MOCK_DB = True
+from sqlalchemy.ext.asyncio import (
+    AsyncSession, 
+    AsyncEngine,
+    create_async_engine,
+    async_sessionmaker
+)
+from sqlalchemy.orm import declarative_base
+from app.core.config import settings
 
-# 声明基类 (Mock 模式也需要保留接口)
-Base = None
-engine = None
-async_session_factory = None
+# 创建异步引擎
+engine = create_async_engine(
+    settings.async_database_url,
+    echo=settings.debug,
+    pool_pre_ping=True,
+    pool_size=5,
+    max_overflow=10,
+)
 
-if not USE_MOCK_DB:
-    # 真实数据库配置 (生产环境使用)
-    from sqlalchemy.ext.asyncio import (
-        AsyncSession, 
-        AsyncEngine,
-        create_async_engine,
-        async_sessionmaker
-    )
-    from sqlalchemy.orm import declarative_base
-    from app.core.config import settings
+# 创建异步会话工厂
+async_session_factory = async_sessionmaker(
+    bind=engine,
+    class_=AsyncSession,
+    expire_on_commit=False,
+    autocommit=False,
+    autoflush=False,
+)
 
-    engine = create_async_engine(
-        settings.async_database_url,
-        echo=settings.debug,
-        pool_pre_ping=True,
-        pool_size=5,
-        max_overflow=10,
-    )
-
-    async_session_factory = async_sessionmaker(
-        bind=engine,
-        class_=AsyncSession,
-        expire_on_commit=False,
-        autocommit=False,
-        autoflush=False,
-    )
-
-    Base = declarative_base()
+# 声明基类
+Base = declarative_base()
 
 
-async def get_async_session():
+async def get_async_session() -> AsyncGenerator[AsyncSession, None]:
     """
     获取异步数据库会话
     用于 FastAPI 依赖注入
-    
-    Mock 模式下返回 None
     """
-    if USE_MOCK_DB:
-        yield None
-        return
-        
     async with async_session_factory() as session:
         try:
             yield session
@@ -70,25 +54,15 @@ async def get_async_session():
 async def init_db() -> None:
     """
     初始化数据库（创建表）
-    
-    Mock 模式下为空操作
     """
-    if USE_MOCK_DB:
-        print("[DB] Using Mock mode - skip initialization")
-        return
-        
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+    print("[DB] Database initialized")
 
 
 async def close_db() -> None:
     """
     关闭数据库连接
-    
-    Mock 模式下为空操作
     """
-    if USE_MOCK_DB:
-        print("[DB] Mock mode - no connection to close")
-        return
-        
     await engine.dispose()
+    print("[DB] Database connection closed")

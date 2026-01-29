@@ -39,7 +39,7 @@ async def write_draft_node(state: AgentState) -> Dict[str, Any]:
             if review_feedback:
                 revision_count += 1
             
-            # 获取 LLM 服务（根据配置自动选择真实API或Mock）
+            # 获取 LLM 服务
             llm_service = get_llm_service()
             article_content, usage_info = await llm_service.write_draft(
                 topic=selected_topic,

@@ -219,8 +219,8 @@ backend/
 │   │   ├── workflow.py          # 工作流组装
 │   │   └── utils.py             # 工具函数
 │   ├── services/
-│   │   ├── llm_mock.py          # Mock LLM 服务
-│   │   └── image_mock.py        # Mock 图片服务
+│   │   ├── llm_service.py       # LLM 服务 (火山引擎 Doubao)
+│   │   └── image_service.py     # 图片生成服务
 │   └── main.py                  # 应用入口
 ├── scripts/
 │   └── init_db.sql              # 数据库初始化脚本
@@ -232,7 +232,7 @@ backend/
 ## 注意事项
 
 1. **数据库连接**: 确保 PostgreSQL 服务运行且可访问
-2. **Mock 服务**: 当前使用 Mock 服务模拟 LLM 和图片生成，生产环境需替换为真实 API
+2. **LLM 配置**: 在 `.env` 中配置火山引擎 Doubao API Key
 3. **状态持久化**: LangGraph Checkpointer 会自动创建所需表结构
 
 ## License

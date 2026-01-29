@@ -1,6 +1,6 @@
 """
 LLM 服务模块
-支持真实 API 调用和 Mock 模式切换
+使用火山引擎 Doubao API 进行 LLM 调用
 """
 import os
 from typing import List, Tuple, Optional

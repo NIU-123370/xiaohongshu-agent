@@ -10,12 +10,12 @@ from langgraph.types import interrupt, Command
 
 from app.graph.state import AgentState
 from app.graph.nodes import (
-    plan_topics_node,
     write_draft_node,
     extract_visuals_node,
     generate_images_node,
 )
 from app.graph.utils import get_checkpointer
+from app.graph.subgraphs.topic_selection import get_compiled_topic_selection_subgraph
 
 
 def should_continue_after_review(state: AgentState) -> Literal["extract_visuals", "write_draft"]:
@@ -37,40 +37,6 @@ def should_continue_after_review(state: AgentState) -> Literal["extract_visuals"
     else:
         # rejected 或 pending 都回到写作节点
         return "write_draft"
-
-
-async def human_select_topic_node(state: AgentState) -> Command[Literal["write_draft"]]:
-    """
-    人工选题节点 (使用 LangGraph 1.0+ interrupt 模式)
-    
-    使用 interrupt() 暂停执行，等待人工输入选题
-    
-    Args:
-        state: 当前工作流状态
-        
-    Returns:
-        Command 对象，包含状态更新和下一个节点
-    """
-    generated_topics = state.get("generated_topics", [])
-    
-    # 使用 interrupt 暂停，等待用户选择
-    # 用户通过 update_state 提供 selected_topic 后，workflow resume
-    user_input = interrupt({
-        "message": "请从以下选题中选择一个",
-        "options": generated_topics,
-        "action_required": "select_topic"
-    })
-    
-    # 当用户通过 Command 恢复时，user_input 包含用户的选择
-    selected_topic = user_input.get("selected_topic", "") if isinstance(user_input, dict) else ""
-    
-    return Command(
-        update={
-            "selected_topic": selected_topic,
-            "status": "topic_selected",
-        },
-        goto="write_draft"
-    )
 
 
 async def human_review_node(state: AgentState) -> Command[Literal["extract_visuals", "write_draft"]]:
@@ -128,11 +94,10 @@ def build_workflow_graph() -> StateGraph:
     构建工作流图 (LangGraph 1.0+ 语法)
     
     工作流逻辑：
-    1. Start -> plan_topics (AI 生成选题)
-    2. INTERRUPT: human_select_topic (等待人工选题，使用 interrupt())
-    3. human_select_topic -> write_draft (AI 写文章)
-    4. INTERRUPT: human_review (等待人工审稿，使用 interrupt())
-    5. human_review -> 条件路由:
+    1. Start -> topic_selection (选题子图：AI 生成选题 + 人工选题)
+    2. topic_selection -> write_draft (AI 写文章)
+    3. INTERRUPT: human_review (等待人工审稿，使用 interrupt())
+    4. human_review -> 条件路由:
        - approved: extract_visuals -> generate_images -> End
        - rejected: 回到 write_draft (重写)
     
@@ -142,22 +107,23 @@ def build_workflow_graph() -> StateGraph:
     # 创建状态图
     workflow = StateGraph(AgentState)
     
+    # 获取编译后的选题子图
+    topic_selection_subgraph = get_compiled_topic_selection_subgraph()
+    
     # 添加节点
-    workflow.add_node("plan_topics", plan_topics_node)
-    workflow.add_node("human_select_topic", human_select_topic_node)
+    # 使用子图作为节点：将选题相关逻辑封装为 topic_selection 子图
+    workflow.add_node("topic_selection", topic_selection_subgraph)
     workflow.add_node("write_draft", write_draft_node)
     workflow.add_node("human_review", human_review_node)
     workflow.add_node("extract_visuals", extract_visuals_node)
     workflow.add_node("generate_images", generate_images_node)
     
     # 添加边
-    # Start -> plan_topics
-    workflow.add_edge(START, "plan_topics")
+    # Start -> topic_selection (选题子图)
+    workflow.add_edge(START, "topic_selection")
     
-    # plan_topics -> human_select_topic
-    workflow.add_edge("plan_topics", "human_select_topic")
-    
-    # human_select_topic 使用 Command 动态路由到 write_draft
+    # topic_selection -> write_draft (子图完成后进入写作)
+    workflow.add_edge("topic_selection", "write_draft")
     
     # write_draft -> human_review
     workflow.add_edge("write_draft", "human_review")

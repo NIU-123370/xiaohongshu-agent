@@ -25,7 +25,7 @@ async def plan_topics_node(state: AgentState) -> Dict[str, Any]:
     
     with MetricsContext("plan_topics") as tracker:
         try:
-            # 获取 LLM 服务（根据配置自动选择真实API或Mock）
+            # 获取 LLM 服务
             llm_service = get_llm_service()
             generated_topics, usage_info = await llm_service.plan_topics(topic_direction)
             

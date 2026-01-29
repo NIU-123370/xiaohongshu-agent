@@ -9,10 +9,11 @@ from typing import Optional, Dict, Any, List, Literal
 from fastapi import APIRouter, HTTPException, status
 from pydantic import BaseModel, Field
 from langgraph.types import Command
+import psycopg
 
 from app.graph.workflow import get_graph
 from app.graph.state import INITIAL_STATE
-from app.graph.utils import get_checkpointer, USE_MOCK_CHECKPOINTER
+from app.graph.utils import get_checkpointer
 from app.core.config import settings
 
 router = APIRouter(prefix="/workflow", tags=["Workflow"])
@@ -412,81 +413,48 @@ async def get_all_threads() -> ThreadListResponse:
     try:
         threads = []
         
-        if USE_MOCK_CHECKPOINTER:
-            # MemorySaver 模式：从内存中获取
-            from langgraph.checkpoint.memory import MemorySaver
-            checkpointer = await get_checkpointer()
-            
-            if isinstance(checkpointer, MemorySaver):
-                # MemorySaver 内部存储结构：storage[thread_id][checkpoint_ns][checkpoint_id]
-                if hasattr(checkpointer, 'storage'):
-                    for thread_id in checkpointer.storage.keys():
-                        # 获取该 thread 的状态
-                        graph = await get_graph()
-                        config = {"configurable": {"thread_id": thread_id}}
-                        try:
-                            state_snapshot = await graph.aget_state(config)
-                            if state_snapshot and state_snapshot.values:
-                                values = state_snapshot.values
-                                next_nodes = list(state_snapshot.next) if state_snapshot.next else []
-                                interrupt_info = extract_interrupt_info(state_snapshot)
-                                is_completed = len(next_nodes) == 0 and not interrupt_info
-                                
-                                threads.append(ThreadInfo(
-                                    thread_id=thread_id,
-                                    topic_direction=values.get("topic_direction", ""),
-                                    selected_topic=values.get("selected_topic", ""),
-                                    status=values.get("status", "unknown"),
-                                    is_completed=is_completed,
-                                    created_at=None
-                                ))
-                        except Exception:
-                            continue
-        else:
-            # PostgreSQL 模式：从数据库查询
-            import psycopg
-            
-            async with await psycopg.AsyncConnection.connect(
-                settings.postgres_uri,
-                autocommit=True
-            ) as conn:
-                async with conn.cursor() as cur:
-                    # 查询所有唯一的 thread_id
-                    await cur.execute("""
-                        SELECT DISTINCT thread_id 
-                        FROM checkpoints 
-                        ORDER BY thread_id
-                    """)
-                    rows = await cur.fetchall()
-                    
-                    graph = await get_graph()
-                    
-                    for row in rows:
-                        thread_id = row[0]
-                        config = {"configurable": {"thread_id": thread_id}}
-                        try:
-                            state_snapshot = await graph.aget_state(config)
-                            if state_snapshot and state_snapshot.values:
-                                values = state_snapshot.values
-                                next_nodes = list(state_snapshot.next) if state_snapshot.next else []
-                                interrupt_info = extract_interrupt_info(state_snapshot)
-                                is_completed = len(next_nodes) == 0 and not interrupt_info
-                                
-                                # 获取创建时间
-                                created_at = None
-                                if hasattr(state_snapshot, 'created_at') and state_snapshot.created_at:
-                                    created_at = state_snapshot.created_at
-                                
-                                threads.append(ThreadInfo(
-                                    thread_id=thread_id,
-                                    topic_direction=values.get("topic_direction", ""),
-                                    selected_topic=values.get("selected_topic", ""),
-                                    status=values.get("status", "unknown"),
-                                    is_completed=is_completed,
-                                    created_at=created_at
-                                ))
-                        except Exception:
-                            continue
+        # 从 PostgreSQL 数据库查询
+        async with await psycopg.AsyncConnection.connect(
+            settings.postgres_uri,
+            autocommit=True
+        ) as conn:
+            async with conn.cursor() as cur:
+                # 查询所有唯一的 thread_id
+                await cur.execute("""
+                    SELECT DISTINCT thread_id 
+                    FROM checkpoints 
+                    ORDER BY thread_id
+                """)
+                rows = await cur.fetchall()
+                
+                graph = await get_graph()
+                
+                for row in rows:
+                    thread_id = row[0]
+                    config = {"configurable": {"thread_id": thread_id}}
+                    try:
+                        state_snapshot = await graph.aget_state(config)
+                        if state_snapshot and state_snapshot.values:
+                            values = state_snapshot.values
+                            next_nodes = list(state_snapshot.next) if state_snapshot.next else []
+                            interrupt_info = extract_interrupt_info(state_snapshot)
+                            is_completed = len(next_nodes) == 0 and not interrupt_info
+                            
+                            # 获取创建时间
+                            created_at = None
+                            if hasattr(state_snapshot, 'created_at') and state_snapshot.created_at:
+                                created_at = state_snapshot.created_at
+                            
+                            threads.append(ThreadInfo(
+                                thread_id=thread_id,
+                                topic_direction=values.get("topic_direction", ""),
+                                selected_topic=values.get("selected_topic", ""),
+                                status=values.get("status", "unknown"),
+                                is_completed=is_completed,
+                                created_at=created_at
+                            ))
+                    except Exception:
+                        continue
         
         return ThreadListResponse(
             threads=threads,
@@ -512,44 +480,27 @@ async def delete_thread(thread_id: str) -> Dict[str, Any]:
         删除结果
     """
     try:
-        if USE_MOCK_CHECKPOINTER:
-            # MemorySaver 模式：从内存中删除
-            from langgraph.checkpoint.memory import MemorySaver
-            checkpointer = await get_checkpointer()
-            
-            if isinstance(checkpointer, MemorySaver):
-                if hasattr(checkpointer, 'storage') and thread_id in checkpointer.storage:
-                    del checkpointer.storage[thread_id]
-                    return {"success": True, "message": f"线程 {thread_id} 已删除"}
-                else:
-                    raise HTTPException(
-                        status_code=status.HTTP_404_NOT_FOUND,
-                        detail=f"未找到线程: {thread_id}"
-                    )
-        else:
-            # PostgreSQL 模式：从数据库删除
-            import psycopg
-            
-            async with await psycopg.AsyncConnection.connect(
-                settings.postgres_uri,
-                autocommit=True
-            ) as conn:
-                async with conn.cursor() as cur:
-                    # 删除相关记录
-                    await cur.execute(
-                        "DELETE FROM checkpoint_writes WHERE thread_id = %s",
-                        (thread_id,)
-                    )
-                    await cur.execute(
-                        "DELETE FROM checkpoint_blobs WHERE thread_id = %s",
-                        (thread_id,)
-                    )
-                    await cur.execute(
-                        "DELETE FROM checkpoints WHERE thread_id = %s",
-                        (thread_id,)
-                    )
-                    
-                    return {"success": True, "message": f"线程 {thread_id} 已删除"}
+        # 从 PostgreSQL 数据库删除
+        async with await psycopg.AsyncConnection.connect(
+            settings.postgres_uri,
+            autocommit=True
+        ) as conn:
+            async with conn.cursor() as cur:
+                # 删除相关记录
+                await cur.execute(
+                    "DELETE FROM checkpoint_writes WHERE thread_id = %s",
+                    (thread_id,)
+                )
+                await cur.execute(
+                    "DELETE FROM checkpoint_blobs WHERE thread_id = %s",
+                    (thread_id,)
+                )
+                await cur.execute(
+                    "DELETE FROM checkpoints WHERE thread_id = %s",
+                    (thread_id,)
+                )
+                
+                return {"success": True, "message": f"线程 {thread_id} 已删除"}
         
     except HTTPException:
         raise
