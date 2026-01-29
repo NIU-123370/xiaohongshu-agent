@@ -175,16 +175,16 @@ class LLMService:
             (图片文案要点列表, token使用信息)
         """
         system_prompt = """你是一位专业的视觉内容策划师。
-你的任务是分析文章内容，提取出5个适合配图的要点。
+你的任务是分析文章内容，提取出3个适合配图的要点。
 
 要求：
 1. 每个要点应该能够转化为一张有意义的配图
 2. 要点描述要具体，便于图片生成
-3. 包含封面图的建议
+3. 第一个要点作为封面图
 4. 每个要点一行，不要编号
 5. 描述格式：图片类型 + 具体内容描述
 
-请直接输出5个配图要点，每行一个。"""
+请直接输出3个配图要点，每行一个。"""
 
         user_prompt = f"请分析以下文章，提取配图要点：\n\n{article_content[:2000]}"  # 限制长度
         
@@ -205,7 +205,7 @@ class LLMService:
             if line.strip()
         ]
         
-        points = points[:5] if len(points) >= 5 else points
+        points = points[:3] if len(points) >= 3 else points
         return points, usage
 
 

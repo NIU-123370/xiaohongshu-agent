@@ -93,7 +93,7 @@ class ImageService:
         size: str = "2k",
     ) -> List[str]:
         """
-        根据视觉要点批量生成配图（串行调用，保持接口简单）
+        根据视觉要点批量生成配图（并行调用，提高生成速度）
 
         Args:
             visual_points: 文案要点列表
@@ -105,15 +105,14 @@ class ImageService:
         if not visual_points:
             return []
 
-        image_urls: List[str] = []
-        for point in visual_points:
-            url = await self.generate_single_image(
-                prompt=point,
-                size=size,
-            )
-            image_urls.append(url)
+        # 并行生成所有图片
+        tasks = [
+            self.generate_single_image(prompt=point, size=size)
+            for point in visual_points
+        ]
+        image_urls = await asyncio.gather(*tasks)
 
-        return image_urls
+        return list(image_urls)
 
 
 # 创建单例实例，供 get_image_service 使用
