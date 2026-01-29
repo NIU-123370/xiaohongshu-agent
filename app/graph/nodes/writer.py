@@ -5,6 +5,7 @@
 from typing import Dict, Any
 from app.graph.state import AgentState
 from app.services import get_llm_service
+from app.graph.metrics import MetricsContext, LLMUsage, merge_metrics
 
 
 async def write_draft_node(state: AgentState) -> Dict[str, Any]:
@@ -23,6 +24,7 @@ async def write_draft_node(state: AgentState) -> Dict[str, Any]:
     selected_topic = state.get("selected_topic", "")
     review_feedback = state.get("review_feedback", "")
     revision_count = state.get("revision_count", 0)
+    existing_metrics = state.get("node_metrics", [])
     
     if not selected_topic:
         return {
@@ -31,30 +33,43 @@ async def write_draft_node(state: AgentState) -> Dict[str, Any]:
             "error": "未选择选题，无法生成文章",
         }
     
-    try:
-        # 如果有修改意见，增加修订计数
-        if review_feedback:
-            revision_count += 1
-        
-        # 获取 LLM 服务（根据配置自动选择真实API或Mock）
-        llm_service = get_llm_service()
-        article_content = await llm_service.write_draft(
-            topic=selected_topic,
-            feedback=review_feedback,
-            revision_count=revision_count
-        )
-        
-        return {
-            "article_content": article_content,
-            "revision_count": revision_count,
-            "review_status": "pending",
-            "status": "draft_generated",
-            "error": "",
-        }
-        
-    except Exception as e:
-        return {
-            "article_content": "",
-            "status": "error",
-            "error": f"生成文章失败: {str(e)}",
-        }
+    with MetricsContext("write_draft") as tracker:
+        try:
+            # 如果有修改意见，增加修订计数
+            if review_feedback:
+                revision_count += 1
+            
+            # 获取 LLM 服务（根据配置自动选择真实API或Mock）
+            llm_service = get_llm_service()
+            article_content, usage_info = await llm_service.write_draft(
+                topic=selected_topic,
+                feedback=review_feedback,
+                revision_count=revision_count
+            )
+            
+            # 记录 LLM 使用信息
+            tracker.set_llm_usage(LLMUsage(
+                input_tokens=usage_info.input_tokens,
+                output_tokens=usage_info.output_tokens,
+                total_tokens=usage_info.total_tokens,
+                model=usage_info.model
+            ))
+            
+            result = {
+                "article_content": article_content,
+                "revision_count": revision_count,
+                "review_status": "pending",
+                "status": "draft_generated",
+                "error": "",
+            }
+            
+        except Exception as e:
+            result = {
+                "article_content": "",
+                "status": "error",
+                "error": f"生成文章失败: {str(e)}",
+            }
+    
+    # 在 with 块结束后（tracker.stop() 已被调用），再获取指标
+    result["node_metrics"] = merge_metrics(existing_metrics, tracker.to_dict())
+    return result

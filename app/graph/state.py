@@ -4,8 +4,32 @@ LangGraph 状态定义模块
 
 LangGraph 1.0+ 推荐使用 TypedDict 定义状态
 """
-from typing import TypedDict, List, Literal, Annotated
+from typing import TypedDict, List, Literal, Annotated, Dict, Any
 from langgraph.graph.message import add_messages
+
+
+class NodeMetric(TypedDict, total=False):
+    """
+    单个节点的执行指标
+    
+    Attributes:
+        node_name: 节点名称
+        duration_ms: 执行耗时(毫秒)
+        input_tokens: 输入token数量
+        output_tokens: 输出token数量
+        total_tokens: 总token数量
+        start_time: 开始时间(ISO格式)
+        end_time: 结束时间(ISO格式)
+        model: 使用的模型名称
+    """
+    node_name: str
+    duration_ms: float
+    input_tokens: int
+    output_tokens: int
+    total_tokens: int
+    start_time: str
+    end_time: str
+    model: str
 
 
 class AgentState(TypedDict, total=False):
@@ -27,6 +51,7 @@ class AgentState(TypedDict, total=False):
         image_urls: 生成的图片 URL 列表
         status: 当前工作流状态描述
         error: 错误信息（如果有）
+        node_metrics: 各节点执行指标
     """
     # 选题阶段
     topic_direction: str
@@ -46,6 +71,9 @@ class AgentState(TypedDict, total=False):
     # 工作流元数据
     status: str
     error: str
+    
+    # 节点执行指标
+    node_metrics: List[NodeMetric]
 
 
 # 状态初始值
@@ -61,4 +89,5 @@ INITIAL_STATE: AgentState = {
     "image_urls": [],
     "status": "initialized",
     "error": "",
+    "node_metrics": [],
 }

@@ -3,14 +3,24 @@ Mock LLM 服务模块
 模拟 LLM API 调用，用于开发和测试
 """
 import asyncio
-from typing import List
+from typing import List, Tuple
+from dataclasses import dataclass
+
+
+@dataclass
+class MockLLMUsageInfo:
+    """Mock LLM 调用的 token 使用信息"""
+    input_tokens: int = 0
+    output_tokens: int = 0
+    total_tokens: int = 0
+    model: str = "mock-model"
 
 
 class MockLLMService:
     """Mock LLM 服务类"""
     
     @staticmethod
-    async def plan_topics(topic_direction: str) -> List[str]:
+    async def plan_topics(topic_direction: str) -> Tuple[List[str], MockLLMUsageInfo]:
         """
         根据主题方向生成候选选题
         
@@ -18,7 +28,7 @@ class MockLLMService:
             topic_direction: 用户输入的主题方向
             
         Returns:
-            生成的选题列表
+            (生成的选题列表, token使用信息)
         """
         # 模拟 API 延迟
         await asyncio.sleep(0.5)
@@ -34,16 +44,26 @@ class MockLLMService:
         
         # 根据主题方向微调（模拟个性化）
         if topic_direction:
-            return [f"{topic} - {topic_direction}方向" for topic in base_topics[:3]] + base_topics[3:]
+            topics = [f"{topic} - {topic_direction}方向" for topic in base_topics[:3]] + base_topics[3:]
+        else:
+            topics = base_topics
         
-        return base_topics
+        # 模拟 token 使用量
+        usage = MockLLMUsageInfo(
+            input_tokens=150,
+            output_tokens=200,
+            total_tokens=350,
+            model="mock-model"
+        )
+        
+        return topics, usage
     
     @staticmethod
     async def write_draft(
         topic: str, 
         feedback: str = "",
         revision_count: int = 0
-    ) -> str:
+    ) -> Tuple[str, MockLLMUsageInfo]:
         """
         根据选题生成文章草稿
         
@@ -53,7 +73,7 @@ class MockLLMService:
             revision_count: 当前修订次数
             
         Returns:
-            生成的文章内容
+            (生成的文章内容, token使用信息)
         """
         # 模拟 API 延迟
         await asyncio.sleep(1.0)
@@ -123,10 +143,18 @@ if __name__ == "__main__":
 *本文由 AI 内容助手生成，仅供参考学习使用。*
 """
         
-        return article
+        # 模拟 token 使用量
+        usage = MockLLMUsageInfo(
+            input_tokens=300,
+            output_tokens=1200,
+            total_tokens=1500,
+            model="mock-model"
+        )
+        
+        return article, usage
     
     @staticmethod
-    async def extract_visual_points(article_content: str) -> List[str]:
+    async def extract_visual_points(article_content: str) -> Tuple[List[str], MockLLMUsageInfo]:
         """
         从文章中提取适合配图的要点
         
@@ -134,7 +162,7 @@ if __name__ == "__main__":
             article_content: 文章内容
             
         Returns:
-            图片文案要点列表
+            (图片文案要点列表, token使用信息)
         """
         # 模拟 API 延迟
         await asyncio.sleep(0.3)
@@ -148,7 +176,15 @@ if __name__ == "__main__":
             "封面图：吸引眼球的主题配图"
         ]
         
-        return visual_points
+        # 模拟 token 使用量
+        usage = MockLLMUsageInfo(
+            input_tokens=500,
+            output_tokens=100,
+            total_tokens=600,
+            model="mock-model"
+        )
+        
+        return visual_points, usage
 
 
 # 创建单例实例

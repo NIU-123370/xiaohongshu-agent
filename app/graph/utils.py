@@ -48,10 +48,10 @@ async def setup_checkpointer() -> BaseCheckpointSaver:
     if USE_MOCK_CHECKPOINTER:
         # 使用内存版 Checkpointer (无需数据库)
         _checkpointer = MemorySaver()
-        print("📝 使用 MemorySaver (内存模式) - 数据不会持久化")
+        print("[Checkpointer] Using MemorySaver (memory mode) - data will not persist")
     else:
         # 使用 PostgreSQL Checkpointer (数据持久化)
-        print(f"📦 连接 PostgreSQL: {settings.postgres_uri.split('@')[-1]}")
+        print(f"[Checkpointer] Connecting to PostgreSQL: {settings.postgres_uri.split('@')[-1]}")
         
         # 首先使用 autocommit 模式的连接来执行 setup()
         # 因为 CREATE INDEX CONCURRENTLY 不能在事务块中运行
@@ -62,7 +62,7 @@ async def setup_checkpointer() -> BaseCheckpointSaver:
             # 创建临时 checkpointer 用于 setup
             temp_checkpointer = AsyncPostgresSaver(setup_conn)
             await temp_checkpointer.setup()
-            print("✅ Checkpointer 表结构已创建/验证")
+            print("[OK] Checkpointer tables created/verified")
         
         # 创建异步连接池用于正常操作
         _connection_pool = AsyncConnectionPool(
@@ -78,7 +78,7 @@ async def setup_checkpointer() -> BaseCheckpointSaver:
         # 创建 PostgreSQL Checkpointer
         _checkpointer = AsyncPostgresSaver(_connection_pool)
         
-        print("✅ PostgreSQL Checkpointer 初始化成功 - 数据将持久化到数据库")
+        print("[OK] PostgreSQL Checkpointer initialized - data will persist")
     
     return _checkpointer
 
@@ -113,7 +113,7 @@ async def close_checkpointer() -> None:
         # 关闭 PostgreSQL 连接池
         await _connection_pool.close()
         _connection_pool = None
-        print("📦 PostgreSQL 连接池已关闭")
+        print("[Checkpointer] PostgreSQL connection pool closed")
     
     _checkpointer = None
-    print("📝 Checkpointer 已清理")
+    print("[Checkpointer] Cleaned up")

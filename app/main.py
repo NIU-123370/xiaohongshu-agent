@@ -37,35 +37,35 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     - 关闭 Checkpointer 连接池
     """
     # 启动时执行
-    print(f"🚀 正在启动 {settings.app_name}...")
+    print(f"[Starting] {settings.app_name}...")
     
     try:
         # 初始化 SQLAlchemy 数据库
-        print("📦 初始化数据库连接...")
+        print("[DB] Initializing database connection...")
         await init_db()
         
         # 初始化 LangGraph Checkpointer
-        print("🔧 初始化 LangGraph Checkpointer...")
+        print("[Checkpointer] Initializing LangGraph Checkpointer...")
         await setup_checkpointer()
         
-        print(f"✅ {settings.app_name} 启动成功!")
-        print(f"📖 API 文档: http://localhost:8000/docs")
+        print(f"[OK] {settings.app_name} started successfully!")
+        print(f"[Docs] API docs: http://localhost:8000/docs")
         
     except Exception as e:
-        print(f"❌ 启动失败: {str(e)}")
+        print(f"[ERROR] Startup failed: {str(e)}")
         raise
     
     yield
     
     # 关闭时执行
-    print(f"🛑 正在关闭 {settings.app_name}...")
+    print(f"[Stopping] {settings.app_name}...")
     
     try:
         await close_checkpointer()
         await close_db()
-        print("✅ 资源已释放")
+        print("[OK] Resources released")
     except Exception as e:
-        print(f"⚠️ 关闭时出错: {str(e)}")
+        print(f"[WARN] Error during shutdown: {str(e)}")
 
 
 # 创建 FastAPI 应用

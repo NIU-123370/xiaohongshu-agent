@@ -12,11 +12,25 @@ from langgraph.types import Command
 
 from app.graph.workflow import get_graph
 from app.graph.state import INITIAL_STATE
+from app.graph.utils import get_checkpointer, USE_MOCK_CHECKPOINTER
+from app.core.config import settings
 
 router = APIRouter(prefix="/workflow", tags=["Workflow"])
 
 
 # ============== 请求/响应模型 ==============
+
+class NodeMetricInfo(BaseModel):
+    """节点执行指标"""
+    node_name: str = Field(..., description="节点名称")
+    duration_ms: float = Field(default=0, description="执行耗时(毫秒)")
+    input_tokens: int = Field(default=0, description="输入token数量")
+    output_tokens: int = Field(default=0, description="输出token数量")
+    total_tokens: int = Field(default=0, description="总token数量")
+    start_time: str = Field(default="", description="开始时间")
+    end_time: str = Field(default="", description="结束时间")
+    model: str = Field(default="", description="使用的模型")
+
 
 class StartWorkflowRequest(BaseModel):
     """启动工作流请求"""
@@ -35,6 +49,7 @@ class StartWorkflowResponse(BaseModel):
     generated_topics: List[str] = Field(default=[], description="生成的选题列表")
     message: str = Field(..., description="提示信息")
     interrupt_info: Optional[Dict[str, Any]] = Field(default=None, description="中断信息")
+    node_metrics: List[NodeMetricInfo] = Field(default=[], description="节点执行指标")
 
 
 class WorkflowStateResponse(BaseModel):
@@ -45,6 +60,7 @@ class WorkflowStateResponse(BaseModel):
     next_nodes: List[str] = Field(default=[], description="下一个待执行节点")
     is_completed: bool = Field(default=False, description="是否已完成")
     interrupt_info: Optional[Dict[str, Any]] = Field(default=None, description="中断信息")
+    node_metrics: List[NodeMetricInfo] = Field(default=[], description="节点执行指标")
 
 
 class ResumeWorkflowRequest(BaseModel):
@@ -68,6 +84,23 @@ class ResumeWorkflowResponse(BaseModel):
     is_completed: bool = Field(default=False, description="是否已完成")
     result: Optional[Dict[str, Any]] = Field(default=None, description="完成时的结果")
     interrupt_info: Optional[Dict[str, Any]] = Field(default=None, description="下一个中断信息")
+    node_metrics: List[NodeMetricInfo] = Field(default=[], description="节点执行指标")
+
+
+class ThreadInfo(BaseModel):
+    """线程信息"""
+    thread_id: str = Field(..., description="线程ID")
+    topic_direction: str = Field(default="", description="主题方向")
+    selected_topic: str = Field(default="", description="选中的选题")
+    status: str = Field(default="", description="当前状态")
+    is_completed: bool = Field(default=False, description="是否已完成")
+    created_at: Optional[str] = Field(default=None, description="创建时间")
+
+
+class ThreadListResponse(BaseModel):
+    """线程列表响应"""
+    threads: List[ThreadInfo] = Field(default=[], description="线程列表")
+    total: int = Field(default=0, description="总数")
 
 
 # ============== 辅助函数 ==============
@@ -133,13 +166,15 @@ async def start_workflow(request: StartWorkflowRequest) -> StartWorkflowResponse
         # 获取生成的选题
         generated_topics = result.get("generated_topics", [])
         current_status = result.get("status", "unknown")
+        node_metrics = result.get("node_metrics", [])
         
         return StartWorkflowResponse(
             thread_id=thread_id,
             status=current_status,
             generated_topics=generated_topics,
             message="工作流已启动，请选择一个选题继续",
-            interrupt_info=interrupt_info
+            interrupt_info=interrupt_info,
+            node_metrics=node_metrics
         )
         
     except Exception as e:
@@ -185,13 +220,17 @@ async def get_workflow_state(thread_id: str) -> WorkflowStateResponse:
         # 获取中断信息
         interrupt_info = extract_interrupt_info(state_snapshot)
         
+        # 获取节点指标
+        node_metrics = state_snapshot.values.get("node_metrics", [])
+        
         return WorkflowStateResponse(
             thread_id=thread_id,
             status=state_snapshot.values.get("status", "unknown"),
             values=dict(state_snapshot.values),
             next_nodes=next_nodes,
             is_completed=is_completed,
-            interrupt_info=interrupt_info
+            interrupt_info=interrupt_info,
+            node_metrics=node_metrics
         )
         
     except HTTPException:
@@ -278,6 +317,9 @@ async def resume_workflow(
         interrupt_info = extract_interrupt_info(updated_state)
         is_completed = len(next_nodes) == 0 and not interrupt_info
         
+        # 获取节点指标
+        node_metrics = updated_state.values.get("node_metrics", [])
+        
         # 构建响应
         message = "操作成功"
         final_result = None
@@ -305,7 +347,8 @@ async def resume_workflow(
             next_nodes=next_nodes,
             is_completed=is_completed,
             result=final_result,
-            interrupt_info=interrupt_info
+            interrupt_info=interrupt_info,
+            node_metrics=node_metrics
         )
         
     except HTTPException:
@@ -355,4 +398,163 @@ async def get_workflow_history(thread_id: str) -> Dict[str, Any]:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"获取工作流历史失败: {str(e)}"
+        )
+
+
+@router.get("/threads", response_model=ThreadListResponse)
+async def get_all_threads() -> ThreadListResponse:
+    """
+    获取所有工作流线程列表
+    
+    Returns:
+        线程列表，包含每个线程的基本信息
+    """
+    try:
+        threads = []
+        
+        if USE_MOCK_CHECKPOINTER:
+            # MemorySaver 模式：从内存中获取
+            from langgraph.checkpoint.memory import MemorySaver
+            checkpointer = await get_checkpointer()
+            
+            if isinstance(checkpointer, MemorySaver):
+                # MemorySaver 内部存储结构：storage[thread_id][checkpoint_ns][checkpoint_id]
+                if hasattr(checkpointer, 'storage'):
+                    for thread_id in checkpointer.storage.keys():
+                        # 获取该 thread 的状态
+                        graph = await get_graph()
+                        config = {"configurable": {"thread_id": thread_id}}
+                        try:
+                            state_snapshot = await graph.aget_state(config)
+                            if state_snapshot and state_snapshot.values:
+                                values = state_snapshot.values
+                                next_nodes = list(state_snapshot.next) if state_snapshot.next else []
+                                interrupt_info = extract_interrupt_info(state_snapshot)
+                                is_completed = len(next_nodes) == 0 and not interrupt_info
+                                
+                                threads.append(ThreadInfo(
+                                    thread_id=thread_id,
+                                    topic_direction=values.get("topic_direction", ""),
+                                    selected_topic=values.get("selected_topic", ""),
+                                    status=values.get("status", "unknown"),
+                                    is_completed=is_completed,
+                                    created_at=None
+                                ))
+                        except Exception:
+                            continue
+        else:
+            # PostgreSQL 模式：从数据库查询
+            import psycopg
+            
+            async with await psycopg.AsyncConnection.connect(
+                settings.postgres_uri,
+                autocommit=True
+            ) as conn:
+                async with conn.cursor() as cur:
+                    # 查询所有唯一的 thread_id
+                    await cur.execute("""
+                        SELECT DISTINCT thread_id 
+                        FROM checkpoints 
+                        ORDER BY thread_id
+                    """)
+                    rows = await cur.fetchall()
+                    
+                    graph = await get_graph()
+                    
+                    for row in rows:
+                        thread_id = row[0]
+                        config = {"configurable": {"thread_id": thread_id}}
+                        try:
+                            state_snapshot = await graph.aget_state(config)
+                            if state_snapshot and state_snapshot.values:
+                                values = state_snapshot.values
+                                next_nodes = list(state_snapshot.next) if state_snapshot.next else []
+                                interrupt_info = extract_interrupt_info(state_snapshot)
+                                is_completed = len(next_nodes) == 0 and not interrupt_info
+                                
+                                # 获取创建时间
+                                created_at = None
+                                if hasattr(state_snapshot, 'created_at') and state_snapshot.created_at:
+                                    created_at = state_snapshot.created_at
+                                
+                                threads.append(ThreadInfo(
+                                    thread_id=thread_id,
+                                    topic_direction=values.get("topic_direction", ""),
+                                    selected_topic=values.get("selected_topic", ""),
+                                    status=values.get("status", "unknown"),
+                                    is_completed=is_completed,
+                                    created_at=created_at
+                                ))
+                        except Exception:
+                            continue
+        
+        return ThreadListResponse(
+            threads=threads,
+            total=len(threads)
+        )
+        
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"获取线程列表失败: {str(e)}"
+        )
+
+
+@router.delete("/threads/{thread_id}")
+async def delete_thread(thread_id: str) -> Dict[str, Any]:
+    """
+    删除指定的工作流线程
+    
+    Args:
+        thread_id: 工作流线程ID
+        
+    Returns:
+        删除结果
+    """
+    try:
+        if USE_MOCK_CHECKPOINTER:
+            # MemorySaver 模式：从内存中删除
+            from langgraph.checkpoint.memory import MemorySaver
+            checkpointer = await get_checkpointer()
+            
+            if isinstance(checkpointer, MemorySaver):
+                if hasattr(checkpointer, 'storage') and thread_id in checkpointer.storage:
+                    del checkpointer.storage[thread_id]
+                    return {"success": True, "message": f"线程 {thread_id} 已删除"}
+                else:
+                    raise HTTPException(
+                        status_code=status.HTTP_404_NOT_FOUND,
+                        detail=f"未找到线程: {thread_id}"
+                    )
+        else:
+            # PostgreSQL 模式：从数据库删除
+            import psycopg
+            
+            async with await psycopg.AsyncConnection.connect(
+                settings.postgres_uri,
+                autocommit=True
+            ) as conn:
+                async with conn.cursor() as cur:
+                    # 删除相关记录
+                    await cur.execute(
+                        "DELETE FROM checkpoint_writes WHERE thread_id = %s",
+                        (thread_id,)
+                    )
+                    await cur.execute(
+                        "DELETE FROM checkpoint_blobs WHERE thread_id = %s",
+                        (thread_id,)
+                    )
+                    await cur.execute(
+                        "DELETE FROM checkpoints WHERE thread_id = %s",
+                        (thread_id,)
+                    )
+                    
+                    return {"success": True, "message": f"线程 {thread_id} 已删除"}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"删除线程失败: {str(e)}"
         )

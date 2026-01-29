@@ -3,13 +3,23 @@ LLM 服务模块
 支持真实 API 调用和 Mock 模式切换
 """
 import os
-from typing import List
+from typing import List, Tuple, Optional
+from dataclasses import dataclass
 from dotenv import load_dotenv
 from langchain_openai import ChatOpenAI
 from langchain_core.messages import HumanMessage, SystemMessage
 
 # 加载环境变量
 load_dotenv()
+
+
+@dataclass
+class LLMUsageInfo:
+    """LLM 调用的 token 使用信息"""
+    input_tokens: int = 0
+    output_tokens: int = 0
+    total_tokens: int = 0
+    model: str = ""
 
 
 class LLMService:
@@ -36,7 +46,27 @@ class LLMService:
             )
         return self._llm
     
-    async def plan_topics(self, topic_direction: str) -> List[str]:
+    def _extract_usage_info(self, response) -> LLMUsageInfo:
+        """从 LLM 响应中提取 token 使用信息"""
+        usage = LLMUsageInfo(model=self.model)
+        
+        # LangChain 的响应可能包含 response_metadata
+        if hasattr(response, 'response_metadata'):
+            metadata = response.response_metadata
+            token_usage = metadata.get('token_usage', {})
+            usage.input_tokens = token_usage.get('prompt_tokens', 0)
+            usage.output_tokens = token_usage.get('completion_tokens', 0)
+            usage.total_tokens = token_usage.get('total_tokens', 0)
+        
+        # 也可能在 usage_metadata 中
+        if hasattr(response, 'usage_metadata') and response.usage_metadata:
+            usage.input_tokens = response.usage_metadata.get('input_tokens', usage.input_tokens)
+            usage.output_tokens = response.usage_metadata.get('output_tokens', usage.output_tokens)
+            usage.total_tokens = response.usage_metadata.get('total_tokens', usage.total_tokens)
+        
+        return usage
+    
+    async def plan_topics(self, topic_direction: str) -> Tuple[List[str], LLMUsageInfo]:
         """
         根据主题方向生成候选选题
         
@@ -44,7 +74,7 @@ class LLMService:
             topic_direction: 用户输入的主题方向
             
         Returns:
-            生成的选题列表
+            (生成的选题列表, token使用信息)
         """
         system_prompt = """你是一位专业的小红书内容策划专家。
 你的任务是根据用户提供的主题方向，生成5个适合小红书平台的选题。
@@ -66,6 +96,9 @@ class LLMService:
         
         response = await self.llm.ainvoke(messages)
         
+        # 提取 token 使用信息
+        usage = self._extract_usage_info(response)
+        
         # 解析响应，按行分割获取选题列表
         topics = [
             line.strip() 
@@ -74,14 +107,15 @@ class LLMService:
         ]
         
         # 确保返回至少5个选题
-        return topics[:5] if len(topics) >= 5 else topics
+        topics = topics[:5] if len(topics) >= 5 else topics
+        return topics, usage
     
     async def write_draft(
         self,
         topic: str,
         feedback: str = "",
         revision_count: int = 0
-    ) -> str:
+    ) -> Tuple[str, LLMUsageInfo]:
         """
         根据选题生成文章草稿
         
@@ -91,7 +125,7 @@ class LLMService:
             revision_count: 当前修订次数
             
         Returns:
-            生成的文章内容
+            (生成的文章内容, token使用信息)
         """
         system_prompt = """你是一位专业的小红书内容创作者。
 你的任务是根据给定的选题，创作一篇高质量的小红书文章。
@@ -125,9 +159,12 @@ class LLMService:
         
         response = await self.llm.ainvoke(messages)
         
-        return response.content
+        # 提取 token 使用信息
+        usage = self._extract_usage_info(response)
+        
+        return response.content, usage
     
-    async def extract_visual_points(self, article_content: str) -> List[str]:
+    async def extract_visual_points(self, article_content: str) -> Tuple[List[str], LLMUsageInfo]:
         """
         从文章中提取适合配图的要点
         
@@ -135,7 +172,7 @@ class LLMService:
             article_content: 文章内容
             
         Returns:
-            图片文案要点列表
+            (图片文案要点列表, token使用信息)
         """
         system_prompt = """你是一位专业的视觉内容策划师。
 你的任务是分析文章内容，提取出5个适合配图的要点。
@@ -158,6 +195,9 @@ class LLMService:
         
         response = await self.llm.ainvoke(messages)
         
+        # 提取 token 使用信息
+        usage = self._extract_usage_info(response)
+        
         # 解析响应
         points = [
             line.strip() 
@@ -165,7 +205,8 @@ class LLMService:
             if line.strip()
         ]
         
-        return points[:5] if len(points) >= 5 else points
+        points = points[:5] if len(points) >= 5 else points
+        return points, usage
 
 
 # 创建单例实例

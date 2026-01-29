@@ -5,6 +5,7 @@
 from typing import Dict, Any
 from app.graph.state import AgentState
 from app.services import get_llm_service
+from app.graph.metrics import MetricsContext, LLMUsage, merge_metrics
 
 
 async def plan_topics_node(state: AgentState) -> Dict[str, Any]:
@@ -20,21 +21,35 @@ async def plan_topics_node(state: AgentState) -> Dict[str, Any]:
         更新后的状态字段
     """
     topic_direction = state.get("topic_direction", "")
+    existing_metrics = state.get("node_metrics", [])
     
-    try:
-        # 获取 LLM 服务（根据配置自动选择真实API或Mock）
-        llm_service = get_llm_service()
-        generated_topics = await llm_service.plan_topics(topic_direction)
-        
-        return {
-            "generated_topics": generated_topics,
-            "status": "topics_generated",
-            "error": "",
-        }
-        
-    except Exception as e:
-        return {
-            "generated_topics": [],
-            "status": "error",
-            "error": f"生成选题失败: {str(e)}",
-        }
+    with MetricsContext("plan_topics") as tracker:
+        try:
+            # 获取 LLM 服务（根据配置自动选择真实API或Mock）
+            llm_service = get_llm_service()
+            generated_topics, usage_info = await llm_service.plan_topics(topic_direction)
+            
+            # 记录 LLM 使用信息
+            tracker.set_llm_usage(LLMUsage(
+                input_tokens=usage_info.input_tokens,
+                output_tokens=usage_info.output_tokens,
+                total_tokens=usage_info.total_tokens,
+                model=usage_info.model
+            ))
+            
+            result = {
+                "generated_topics": generated_topics,
+                "status": "topics_generated",
+                "error": "",
+            }
+            
+        except Exception as e:
+            result = {
+                "generated_topics": [],
+                "status": "error",
+                "error": f"生成选题失败: {str(e)}",
+            }
+    
+    # 在 with 块结束后（tracker.stop() 已被调用），再获取指标
+    result["node_metrics"] = merge_metrics(existing_metrics, tracker.to_dict())
+    return result

@@ -74,7 +74,7 @@ async def init_db() -> None:
     Mock 模式下为空操作
     """
     if USE_MOCK_DB:
-        print("📦 数据库使用 Mock 模式 - 跳过初始化")
+        print("[DB] Using Mock mode - skip initialization")
         return
         
     async with engine.begin() as conn:
@@ -88,7 +88,7 @@ async def close_db() -> None:
     Mock 模式下为空操作
     """
     if USE_MOCK_DB:
-        print("📦 数据库 Mock 模式 - 无需关闭连接")
+        print("[DB] Mock mode - no connection to close")
         return
         
     await engine.dispose()
