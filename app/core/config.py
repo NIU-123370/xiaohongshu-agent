@@ -43,6 +43,9 @@ class Settings(BaseSettings):
     # 是否在控制台输出日志（开发时建议开启）
     log_console: bool = True
     
+    # 是否启用 PII 脱敏（邮箱、信用卡、API Key、手机号）
+    log_pii_anonymize: bool = True
+    
     @property
     def async_database_url(self) -> str:
         """获取异步数据库 URL"""

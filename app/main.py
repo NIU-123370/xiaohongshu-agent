@@ -31,6 +31,7 @@ setup_logging(
     log_dir=settings.log_dir,
     json_logs=settings.log_json,
     console_output=settings.log_console,
+    pii_anonymize=settings.log_pii_anonymize,
 )
 
 

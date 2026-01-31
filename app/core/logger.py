@@ -20,6 +20,8 @@ from contextvars import ContextVar
 import structlog
 from structlog.types import Processor
 
+from app.core.pii_anonymizer import pii_anonymize_processor
+
 # ============== Context Variables ==============
 # 用于在请求生命周期内传递 request_id
 request_id_var: ContextVar[Optional[str]] = ContextVar("request_id", default=None)
@@ -68,6 +70,7 @@ def setup_logging(
     log_dir: str = "logs",
     json_logs: bool = True,
     console_output: bool = True,
+    pii_anonymize: bool = True,
 ) -> None:
     """
     配置日志系统
@@ -134,6 +137,10 @@ def setup_logging(
         structlog.processors.StackInfoRenderer(),
         structlog.processors.UnicodeDecoder(),
     ]
+    
+    # 添加 PII 脱敏处理器（在输出前脱敏）
+    if pii_anonymize:
+        shared_processors.append(pii_anonymize_processor)
     
     # 根据是否输出到控制台选择不同的渲染器
     if console_output and not json_logs:

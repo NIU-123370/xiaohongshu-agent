@@ -14,6 +14,15 @@ from pydantic import BaseModel, Field
 # 加载环境变量
 load_dotenv()
 
+# PII 脱敏 callback（延迟导入避免循环依赖）
+def _get_pii_callback():
+    """获取 PII 脱敏回调（延迟导入）"""
+    try:
+        from app.core.callbacks import pii_callback
+        return pii_callback
+    except ImportError:
+        return None
+
 
 # ============== 结构化输出 Pydantic 模型 ==============
 
@@ -48,11 +57,18 @@ class StreamResult:
 class LLMService:
     """LLM 服务类 - 使用火山引擎 Doubao API"""
     
-    def __init__(self):
+    def __init__(self, enable_pii_anonymize: bool = True):
+        """
+        初始化 LLM 服务
+        
+        Args:
+            enable_pii_anonymize: 是否启用 PII 脱敏
+        """
         self.api_key = os.getenv("LLM_API_KEY", "")
         self.base_url = os.getenv("LLM_BASE_URL", "https://ark.cn-beijing.volces.com/api/v3")
         self.model = os.getenv("LLM_MODEL", "doubao-seed-1-8-251228")
         self.temperature = float(os.getenv("LLM_TEMPERATURE", "0"))
+        self.enable_pii_anonymize = enable_pii_anonymize
         
         # 初始化 LLM 客户端
         self._llm = None
@@ -61,11 +77,19 @@ class LLMService:
     def llm(self) -> ChatOpenAI:
         """懒加载 LLM 客户端"""
         if self._llm is None:
+            # 构建 callbacks 列表
+            callbacks = []
+            if self.enable_pii_anonymize:
+                pii_callback = _get_pii_callback()
+                if pii_callback:
+                    callbacks.append(pii_callback)
+            
             self._llm = ChatOpenAI(
                 model=self.model,
                 temperature=self.temperature,
                 api_key=self.api_key,
                 base_url=self.base_url,
+                callbacks=callbacks if callbacks else None,
             )
         return self._llm
     
