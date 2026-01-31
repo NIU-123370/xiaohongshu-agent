@@ -2,7 +2,13 @@
 服务模块
 提供 LLM 和图片生成等服务的统一接口
 """
-from app.services.llm_service import llm_service
+from app.services.llm_service import (
+    llm_service, 
+    LLMUsageInfo, 
+    TopicItem, 
+    TopicsResponse,
+    StreamResult
+)
 from app.services.image_service import image_service
 
 

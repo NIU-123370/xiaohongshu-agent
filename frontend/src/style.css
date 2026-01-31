@@ -194,6 +194,61 @@ body {
   background: #e6f4ff;
 }
 
+/* 结构化选题卡片 */
+.topic-item-structured {
+  padding: 16px;
+  border: 2px solid #e8e8e8;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.topic-item-structured:hover {
+  border-color: #1890ff;
+  background: #f0f7ff;
+}
+
+.topic-item-structured.selected {
+  border-color: #1890ff;
+  background: #e6f4ff;
+}
+
+.topic-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: #1a1a1a;
+  margin-bottom: 8px;
+  line-height: 1.4;
+}
+
+.topic-summary {
+  font-size: 14px;
+  color: #666;
+  line-height: 1.6;
+  margin-bottom: 10px;
+}
+
+.topic-keywords {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.topic-keyword-tag {
+  display: inline-block;
+  padding: 2px 10px;
+  background: #f0f5ff;
+  color: #1890ff;
+  font-size: 12px;
+  border-radius: 12px;
+  border: 1px solid #d6e4ff;
+}
+
+.topic-item-structured.selected .topic-keyword-tag {
+  background: #bae0ff;
+  border-color: #91caff;
+}
+
 /* 文章内容 */
 .article-content {
   background: #fafafa;

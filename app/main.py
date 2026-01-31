@@ -1,6 +1,6 @@
 """
 FastAPI 应用入口
-AI 内容运营助手后端服务
+AI 内容运营助手后端服务 (v1.1 - 添加日志系统)
 """
 import sys
 from pathlib import Path
@@ -18,9 +18,20 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import settings
 from app.core.db import init_db, close_db
+from app.core.logger import setup_logging, app_logger
+from app.core.middleware import RequestLoggingMiddleware
 from app.graph.utils import setup_checkpointer, close_checkpointer
 from app.api.v1.workflow import router as workflow_router
 from app.api.v1.image import router as image_router
+
+# 初始化日志系统（在导入其他模块之前）
+setup_logging(
+    log_level=settings.log_level,
+    log_target=settings.log_target,
+    log_dir=settings.log_dir,
+    json_logs=settings.log_json,
+    console_output=settings.log_console,
+)
 
 
 @asynccontextmanager
@@ -37,35 +48,46 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     - 关闭 Checkpointer 连接池
     """
     # 启动时执行
-    print(f"[Starting] {settings.app_name}...")
+    app_logger.info(f"Starting {settings.app_name}...")
     
     try:
         # 初始化 SQLAlchemy 数据库
-        print("[DB] Initializing database connection...")
+        app_logger.info("Initializing database connection...")
         await init_db()
+        app_logger.db_connected(database_url=settings.database_url.split("@")[-1])  # 不记录密码
         
         # 初始化 LangGraph Checkpointer
-        print("[Checkpointer] Initializing LangGraph Checkpointer...")
+        app_logger.info("Initializing LangGraph Checkpointer...")
         await setup_checkpointer()
         
+        app_logger.service_started(
+            app_name=settings.app_name,
+            debug=settings.debug,
+            log_level=settings.log_level,
+            docs_url="http://localhost:8000/docs"
+        )
+        
+        # 同时保留控制台输出，方便开发时查看
         print(f"[OK] {settings.app_name} started successfully!")
         print(f"[Docs] API docs: http://localhost:8000/docs")
+        print(f"[Logs] Log files: {settings.log_dir}/")
         
     except Exception as e:
-        print(f"[ERROR] Startup failed: {str(e)}")
+        app_logger.error(f"Startup failed: {str(e)}", error=str(e))
         raise
     
     yield
     
     # 关闭时执行
-    print(f"[Stopping] {settings.app_name}...")
+    app_logger.info(f"Stopping {settings.app_name}...")
     
     try:
         await close_checkpointer()
         await close_db()
-        print("[OK] Resources released")
+        app_logger.db_disconnected()
+        app_logger.service_stopped(app_name=settings.app_name)
     except Exception as e:
-        print(f"[WARN] Error during shutdown: {str(e)}")
+        app_logger.warning(f"Error during shutdown: {str(e)}", error=str(e))
 
 
 # 创建 FastAPI 应用
@@ -95,7 +117,11 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# 配置 CORS
+# 配置中间件（注意顺序：先添加的后执行）
+# 1. 请求日志中间件
+app.add_middleware(RequestLoggingMiddleware)
+
+# 2. CORS 中间件
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],  # 生产环境应限制具体域名

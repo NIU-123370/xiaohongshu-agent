@@ -124,7 +124,7 @@
     <!-- 步骤 1: 选择选题 -->
     <div v-if="currentStep === 1" class="card">
       <div class="card-title">请选择一个选题</div>
-      <!-- 流式生成中：显示实时内容 -->
+      <!-- 流式生成中：显示实时内容（非结构化输出时使用） -->
       <div v-if="loading && streamingTopicsText" class="streaming-content">
         <div class="streaming-label">AI 正在生成选题...</div>
         <div class="streaming-text">
@@ -133,22 +133,45 @@
         </div>
       </div>
       <!-- 加载中但还没有内容 -->
-      <div v-else-if="loading && generatedTopics.length === 0 && !streamingTopicsText" class="loading">
+      <div v-else-if="loading && generatedTopicsStructured.length === 0 && generatedTopics.length === 0 && !streamingTopicsText" class="loading">
         <div class="loading-spinner"></div>
         <p style="margin-top: 12px;">AI 正在生成选题...</p>
       </div>
-      <!-- 已生成选题列表 -->
+      <!-- 已生成选题列表 - 结构化展示 -->
       <div v-else class="topic-list">
-        <div 
-          v-for="(topic, index) in generatedTopics" 
-          :key="index"
-          class="topic-item"
-          :class="{ selected: selectedTopic === topic }"
-          @click="selectedTopic = topic"
-        >
-          {{ topic }}
-        </div>
-        <div v-if="loading && generatedTopics.length > 0" class="loading-small" style="margin-top: 12px;">
+        <!-- 优先使用结构化选题数据 -->
+        <template v-if="generatedTopicsStructured.length > 0">
+          <div 
+            v-for="(topic, index) in generatedTopicsStructured" 
+            :key="index"
+            class="topic-item-structured"
+            :class="{ selected: selectedTopic === topic.title }"
+            @click="selectedTopic = topic.title"
+          >
+            <div class="topic-title">{{ topic.title }}</div>
+            <div class="topic-summary" v-if="topic.summary">{{ topic.summary }}</div>
+            <div class="topic-keywords" v-if="topic.keywords && topic.keywords.length > 0">
+              <span 
+                v-for="(keyword, kIndex) in topic.keywords" 
+                :key="kIndex"
+                class="topic-keyword-tag"
+              >{{ keyword }}</span>
+            </div>
+          </div>
+        </template>
+        <!-- 兼容旧格式：仅显示标题 -->
+        <template v-else>
+          <div 
+            v-for="(topic, index) in generatedTopics" 
+            :key="index"
+            class="topic-item"
+            :class="{ selected: selectedTopic === topic }"
+            @click="selectedTopic = topic"
+          >
+            {{ topic }}
+          </div>
+        </template>
+        <div v-if="loading && (generatedTopics.length > 0 || generatedTopicsStructured.length > 0)" class="loading-small" style="margin-top: 12px;">
           <div class="loading-spinner-small"></div>
           <span style="margin-left: 8px; color: #666;">正在生成更多选题...</span>
         </div>
@@ -502,7 +525,8 @@ const interruptInfo = ref(null)
 
 // 步骤数据
 const topicDirection = ref('')
-const generatedTopics = ref([])
+const generatedTopics = ref([])  // 兼容旧格式：仅标题列表
+const generatedTopicsStructured = ref([])  // 新结构化格式：包含标题、摘要、关键词
 const selectedTopic = ref('')
 const streamingTopicsText = ref('') // 流式生成选题时的实时文本
 const articleContent = ref('')
@@ -555,21 +579,22 @@ function showMessage(msg, type = 'info') {
 }
 
 // 启动工作流 (使用 LangGraph 官方 graph.astream)
+// 选题阶段使用非流式结构化输出，但通过 SSE 获取进度更新
 async function handleStart() {
   if (!topicDirection.value.trim()) return
   
   loading.value = true
   message.value = ''
   generatedTopics.value = []
+  generatedTopicsStructured.value = []  // 重置结构化选题
   streamingTopicsText.value = '' // 重置流式文本
   
-  // 立即切换到步骤1，这样用户才能看到流式输出
+  // 立即切换到步骤1，这样用户才能看到加载状态
   currentStep.value = 1
   
   try {
-    let topicsText = ''
-    
     // 使用官方 graph.astream 流式启动工作流
+    // 选题阶段后端使用非流式结构化输出，SSE 主要用于进度反馈
     await streamStartWorkflow(topicDirection.value, {
       // 初始化：获取 thread_id
       onInit: (data) => {
@@ -587,18 +612,19 @@ async function handleStart() {
       // 节点结束事件 (events 模式)
       onNodeEnd: (data) => {
         addStreamLog('node_end', data, 'start')
+        // 节点结束时可能包含 metrics 信息
+        if (data.metrics) {
+          nodeMetrics.value = [...nodeMetrics.value, data.metrics]
+        }
       },
       // LLM 开始事件 (events 模式)
       onLlmStart: (data) => {
         addStreamLog('llm_start', data, 'start')
       },
-      // LLM token 流式输出（events 模式）
+      // LLM token 流式输出（events 模式）- 选题阶段是结构化输出，不会有 token
       onLlmToken: (content) => {
-        topicsText += content
-        streamingTopicsText.value = topicsText
-        // 实时解析选题列表
-        const lines = topicsText.split('\n').filter(line => line.trim())
-        generatedTopics.value = lines.slice(0, 5)
+        // 选题阶段使用结构化输出，一般不会触发此回调
+        // 但保留以兼容旧行为
         addStreamLog('llm_token', content, 'start')
       },
       // LLM 结束事件 (events 模式)
@@ -609,8 +635,17 @@ async function handleStart() {
       onUpdate: (node, output) => {
         console.log('节点更新:', node, output)
         addStreamLog('update', { node, output }, 'start')
-        if (node === 'plan_topics' && output.generated_topics) {
-          generatedTopics.value = output.generated_topics
+        // 子图名称是 topic_selection，内部包含 plan_topics 节点
+        // updates 模式下返回的是子图名称
+        if (node === 'topic_selection' || node === 'plan_topics' || node.includes('plan_topics')) {
+          // 优先使用结构化选题
+          if (output.generated_topics_structured?.length > 0) {
+            generatedTopicsStructured.value = output.generated_topics_structured
+          }
+          // 兼容旧格式
+          if (output.generated_topics?.length > 0) {
+            generatedTopics.value = output.generated_topics
+          }
         }
         if (output.node_metrics) {
           nodeMetrics.value = output.node_metrics
@@ -625,7 +660,22 @@ async function handleStart() {
         addStreamLog('done', data, 'start')
         workflowStatus.value = data.status
         interruptInfo.value = data.interrupt_info
+        
+        // 从 interrupt_info 中获取结构化选题（选题阶段中断时数据在这里）
+        if (data.interrupt_info?.options_structured?.length > 0) {
+          generatedTopicsStructured.value = data.interrupt_info.options_structured
+        }
+        // 从 interrupt_info 中获取选题列表（兼容旧格式）
+        if (data.interrupt_info?.options?.length > 0 && generatedTopics.value.length === 0) {
+          generatedTopics.value = data.interrupt_info.options
+        }
+        
         // 使用最终状态的选题列表
+        // 优先使用结构化选题
+        if (data.values?.generated_topics_structured?.length > 0) {
+          generatedTopicsStructured.value = data.values.generated_topics_structured
+        }
+        // 兼容旧格式
         if (data.values?.generated_topics?.length > 0) {
           generatedTopics.value = data.values.generated_topics
         }
@@ -646,7 +696,7 @@ async function handleStart() {
         currentStep.value = 0
         showMessage(`启动失败: ${errorMsg}`, 'error')
       }
-    }, 'events')  // 使用 events 模式获取 LLM token 流式输出
+    }, 'updates')  // 选题阶段使用 updates 模式（非流式结构化输出）
     
   } catch (error) {
     loading.value = false
@@ -885,6 +935,7 @@ function handleReset() {
   interruptInfo.value = null
   topicDirection.value = ''
   generatedTopics.value = []
+  generatedTopicsStructured.value = []  // 重置结构化选题
   selectedTopic.value = ''
   streamingTopicsText.value = ''
   articleContent.value = ''
@@ -934,6 +985,7 @@ async function handleSwitchThread(targetThreadId) {
     const values = state.values || {}
     topicDirection.value = values.topic_direction || ''
     generatedTopics.value = values.generated_topics || []
+    generatedTopicsStructured.value = values.generated_topics_structured || []  // 加载结构化选题
     selectedTopic.value = values.selected_topic || ''
     articleContent.value = values.article_content || ''
     imageUrls.value = values.image_urls || []

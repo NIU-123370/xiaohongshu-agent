@@ -18,6 +18,7 @@ from app.graph.workflow import get_graph
 from app.graph.state import INITIAL_STATE
 from app.graph.utils import get_checkpointer
 from app.core.config import settings
+from app.core.logger import app_logger
 
 router = APIRouter(prefix="/workflow", tags=["Workflow"])
 
@@ -36,6 +37,13 @@ class NodeMetricInfo(BaseModel):
     model: str = Field(default="", description="使用的模型")
 
 
+class TopicItemInfo(BaseModel):
+    """结构化选题项"""
+    title: str = Field(..., description="选题标题")
+    summary: str = Field(default="", description="选题摘要")
+    keywords: List[str] = Field(default=[], description="关键词标签")
+
+
 class StartWorkflowRequest(BaseModel):
     """启动工作流请求"""
     topic_direction: str = Field(
@@ -50,7 +58,8 @@ class StartWorkflowResponse(BaseModel):
     """启动工作流响应"""
     thread_id: str = Field(..., description="工作流线程ID")
     status: str = Field(..., description="当前状态")
-    generated_topics: List[str] = Field(default=[], description="生成的选题列表")
+    generated_topics: List[str] = Field(default=[], description="生成的选题标题列表（兼容旧格式）")
+    generated_topics_structured: List[TopicItemInfo] = Field(default=[], description="生成的结构化选题列表")
     message: str = Field(..., description="提示信息")
     interrupt_info: Optional[Dict[str, Any]] = Field(default=None, description="中断信息")
     node_metrics: List[NodeMetricInfo] = Field(default=[], description="节点执行指标")
@@ -132,19 +141,26 @@ def extract_interrupt_info(state_snapshot) -> Optional[Dict[str, Any]]:
 @router.post("/start", response_model=StartWorkflowResponse)
 async def start_workflow(request: StartWorkflowRequest) -> StartWorkflowResponse:
     """
-    启动新的工作流
+    启动新的工作流（选题阶段：非流式 + 结构化输出 + token统计）
     
     接收主题方向，启动工作流并运行到第一个中断点（选题阶段）
+    返回结构化的选题列表（包含标题、摘要、关键词）
     
     Args:
         request: 包含 topic_direction 的请求体
         
     Returns:
-        包含 thread_id 和生成的选题列表
+        包含 thread_id 和生成的结构化选题列表
     """
     try:
         # 生成唯一的线程 ID
         thread_id = str(uuid.uuid4())
+        
+        # 记录工作流启动
+        app_logger.workflow_started(
+            thread_id=thread_id,
+            topic_direction=request.topic_direction
+        )
         
         # 获取编译后的图
         graph = await get_graph()
@@ -167,21 +183,46 @@ async def start_workflow(request: StartWorkflowRequest) -> StartWorkflowResponse
         state_snapshot = await graph.aget_state(config)
         interrupt_info = extract_interrupt_info(state_snapshot)
         
-        # 获取生成的选题
+        # 获取生成的选题（兼容旧格式）
         generated_topics = result.get("generated_topics", [])
+        # 获取结构化选题
+        generated_topics_structured = result.get("generated_topics_structured", [])
         current_status = result.get("status", "unknown")
         node_metrics = result.get("node_metrics", [])
+        
+        # 转换为响应模型
+        structured_topics = [
+            TopicItemInfo(
+                title=topic.get("title", ""),
+                summary=topic.get("summary", ""),
+                keywords=topic.get("keywords", [])
+            )
+            for topic in generated_topics_structured
+        ]
+        
+        # 记录阶段变化
+        app_logger.workflow_stage_changed(
+            thread_id=thread_id,
+            stage="topics_generated",
+            topics_count=len(generated_topics)
+        )
         
         return StartWorkflowResponse(
             thread_id=thread_id,
             status=current_status,
             generated_topics=generated_topics,
+            generated_topics_structured=structured_topics,
             message="工作流已启动，请选择一个选题继续",
             interrupt_info=interrupt_info,
             node_metrics=node_metrics
         )
         
     except Exception as e:
+        app_logger.workflow_error(
+            thread_id=thread_id if 'thread_id' in dir() else "unknown",
+            error=str(e),
+            stage="start"
+        )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"启动工作流失败: {str(e)}"
@@ -293,12 +334,19 @@ async def resume_workflow(
             resume_value = {
                 "selected_topic": request.data["selected_topic"],
             }
+            # 记录选题
+            app_logger.topic_selected(
+                thread_id=thread_id,
+                selected_topic=request.data["selected_topic"]
+            )
             
         elif request.action == "approve":
             # 审核通过
             resume_value = {
                 "action": "approve",
             }
+            # 记录审核通过
+            app_logger.draft_approved(thread_id=thread_id)
             
         elif request.action == "reject":
             # 审核驳回
@@ -307,6 +355,13 @@ async def resume_workflow(
                 "action": "reject",
                 "feedback": feedback,
             }
+            # 记录驳回
+            revision_count = current_state.values.get("revision_count", 0)
+            app_logger.draft_rejected(
+                thread_id=thread_id,
+                feedback=feedback,
+                revision_count=revision_count
+            )
         
         # 使用 Command 恢复工作流
         # LangGraph 1.0+ 中，使用 ainvoke(Command(resume=value), config) 恢复
@@ -335,10 +390,18 @@ async def resume_workflow(
                 "visual_points": updated_state.values.get("visual_points", []),
                 "image_urls": updated_state.values.get("image_urls", []),
             }
+            # 记录工作流完成
+            app_logger.workflow_completed(thread_id=thread_id)
         elif interrupt_info:
             action_required = interrupt_info.get("action_required", "")
             if action_required == "review":
                 message = "文章草稿已生成，请审核"
+                # 记录草稿生成
+                article_content = updated_state.values.get("article_content", "")
+                app_logger.draft_generated(
+                    thread_id=thread_id,
+                    word_count=len(article_content)
+                )
             elif action_required == "select_topic":
                 message = "请选择选题"
             else:
@@ -358,6 +421,11 @@ async def resume_workflow(
     except HTTPException:
         raise
     except Exception as e:
+        app_logger.workflow_error(
+            thread_id=thread_id,
+            error=str(e),
+            stage="resume"
+        )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"恢复工作流失败: {str(e)}"
@@ -525,8 +593,8 @@ class StreamStartWorkflowRequest(BaseModel):
         max_length=200
     )
     stream_mode: Literal["values", "updates", "messages", "events"] = Field(
-        default="updates",
-        description="流式输出模式: values(完整状态), updates(增量更新), messages(消息), events(所有事件)"
+        default="events",
+        description="流式输出模式: values(完整状态), updates(增量更新), messages(消息), events(所有事件，推荐用于文章生成)"
     )
 
 
@@ -541,8 +609,8 @@ class StreamResumeWorkflowRequest(BaseModel):
         description="操作数据，select_topic时需要selected_topic，reject时需要feedback"
     )
     stream_mode: Literal["values", "updates", "messages", "events"] = Field(
-        default="updates",
-        description="流式输出模式: values(完整状态), updates(增量更新), messages(消息), events(所有事件)"
+        default="events",
+        description="流式输出模式: values(完整状态), updates(增量更新), messages(消息), events(所有事件，推荐用于文章生成)"
     )
 
 
@@ -570,10 +638,12 @@ async def stream_graph_updates(
     graph, 
     input_data: Any, 
     config: Dict[str, Any],
-    stream_mode: str = "updates"
+    stream_mode: str = "events"
 ) -> AsyncGenerator[str, None]:
     """
     使用 LangGraph 官方 astream 方法流式输出工作流执行过程
+    
+    对于文章生成阶段，推荐使用 events 模式以获取 token 级别的流式输出
     
     Args:
         graph: 编译后的图
@@ -588,8 +658,16 @@ async def stream_graph_updates(
         # 发送开始事件
         yield format_sse_event("start", {"stream_mode": stream_mode})
         
+        # 用于收集 token 统计
+        token_stats = {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "total_tokens": 0
+        }
+        
         if stream_mode == "events":
             # 使用 astream_events 获取详细事件（包括 LLM token 级别）
+            # 这是文章生成流式输出的推荐模式
             async for event in graph.astream_events(input_data, config, version="v2"):
                 event_kind = event.get("event", "")
                 event_name = event.get("name", "")
@@ -603,10 +681,26 @@ async def stream_graph_updates(
                     })
                     
                 elif event_kind == "on_chain_end":
-                    yield format_sse_event("node_end", {
-                        "node": event_name,
-                        "output": event_data.get("output", {})
-                    })
+                    output = event_data.get("output", {})
+                    # 尝试从节点输出中提取 token 统计
+                    if isinstance(output, dict) and "node_metrics" in output:
+                        metrics = output.get("node_metrics", [])
+                        if metrics and isinstance(metrics, list):
+                            latest_metric = metrics[-1] if metrics else {}
+                            yield format_sse_event("node_end", {
+                                "node": event_name,
+                                "metrics": latest_metric
+                            })
+                        else:
+                            yield format_sse_event("node_end", {
+                                "node": event_name,
+                                "output": output
+                            })
+                    else:
+                        yield format_sse_event("node_end", {
+                            "node": event_name,
+                            "output": output
+                        })
                     
                 elif event_kind == "on_chat_model_start":
                     yield format_sse_event("llm_start", {
@@ -615,18 +709,43 @@ async def stream_graph_updates(
                     })
                     
                 elif event_kind == "on_chat_model_stream":
-                    # LLM token 级别的流式输出
+                    # LLM token 级别的流式输出 - 文章生成的核心
                     chunk = event_data.get("chunk", {})
                     if hasattr(chunk, "content") and chunk.content:
                         yield format_sse_event("llm_token", {
                             "content": chunk.content
                         })
+                    
+                    # 尝试从 chunk 获取 token 统计
+                    if hasattr(chunk, "usage_metadata") and chunk.usage_metadata:
+                        token_stats["input_tokens"] = chunk.usage_metadata.get("input_tokens", 0)
+                        token_stats["output_tokens"] = chunk.usage_metadata.get("output_tokens", 0)
+                        token_stats["total_tokens"] = chunk.usage_metadata.get("total_tokens", 0)
                         
                 elif event_kind == "on_chat_model_end":
                     output = event_data.get("output", {})
+                    # 提取 token 使用信息
+                    usage_info = {}
+                    if hasattr(output, "usage_metadata") and output.usage_metadata:
+                        usage_info = {
+                            "input_tokens": output.usage_metadata.get("input_tokens", 0),
+                            "output_tokens": output.usage_metadata.get("output_tokens", 0),
+                            "total_tokens": output.usage_metadata.get("total_tokens", 0)
+                        }
+                        token_stats.update(usage_info)
+                    elif hasattr(output, "response_metadata") and output.response_metadata:
+                        token_usage = output.response_metadata.get("token_usage", {})
+                        if token_usage:
+                            usage_info = {
+                                "input_tokens": token_usage.get("prompt_tokens", 0),
+                                "output_tokens": token_usage.get("completion_tokens", 0),
+                                "total_tokens": token_usage.get("total_tokens", 0)
+                            }
+                            token_stats.update(usage_info)
+                    
                     yield format_sse_event("llm_end", {
                         "model": event_name,
-                        "output": str(output)[:500] if output else ""
+                        "usage": usage_info if usage_info else token_stats
                     })
                     
         else:
@@ -640,9 +759,17 @@ async def stream_graph_updates(
                 elif stream_mode == "updates":
                     # updates 模式：输出 {node_name: output} 格式
                     for node_name, node_output in chunk.items():
+                        # 提取 token 统计信息
+                        metrics_info = {}
+                        if isinstance(node_output, dict) and "node_metrics" in node_output:
+                            metrics = node_output.get("node_metrics", [])
+                            if metrics and isinstance(metrics, list):
+                                metrics_info = metrics[-1] if metrics else {}
+                        
                         yield format_sse_event("update", {
                             "node": node_name,
-                            "output": node_output
+                            "output": node_output,
+                            "metrics": metrics_info
                         })
                         
                 elif stream_mode == "messages":
@@ -662,12 +789,16 @@ async def stream_graph_updates(
         next_nodes = list(final_state.next) if final_state.next else []
         is_completed = len(next_nodes) == 0 and not interrupt_info
         
-        # 发送完成事件
+        # 获取节点指标
+        node_metrics = final_state.values.get("node_metrics", []) if final_state.values else []
+        
+        # 发送完成事件，包含 token 统计
         yield format_sse_event("done", {
             "status": final_state.values.get("status", "unknown") if final_state.values else "unknown",
             "next_nodes": next_nodes,
             "is_completed": is_completed,
             "interrupt_info": interrupt_info,
+            "node_metrics": node_metrics,
             "values": dict(final_state.values) if final_state.values else {}
         })
         
@@ -683,11 +814,13 @@ async def stream_start_workflow(request: StreamStartWorkflowRequest):
     
     使用 Server-Sent Events (SSE) 实时返回工作流执行过程中的事件
     
+    注意：选题阶段使用结构化输出（非流式），但可以通过 SSE 获取进度更新
+    
     stream_mode 说明：
     - values: 每个节点执行后输出完整的状态
-    - updates: 每个节点执行后输出状态的增量更新 (推荐)
+    - updates: 每个节点执行后输出状态的增量更新，包含 token 统计
     - messages: 输出 LLM 消息流
-    - events: 输出所有事件，包括 LLM token 级别的流式输出 (最详细)
+    - events: 输出所有事件，包括 LLM token 级别的流式输出 (推荐用于文章生成)
     """
     # 生成唯一的线程 ID
     thread_id = str(uuid.uuid4())
@@ -740,11 +873,20 @@ async def stream_resume_workflow(thread_id: str, request: StreamResumeWorkflowRe
     
     使用 Server-Sent Events (SSE) 实时返回工作流执行过程中的事件
     
+    特别适合文章生成阶段（select_topic 后），可以实现 token 级别的流式输出
+    
     stream_mode 说明：
     - values: 每个节点执行后输出完整的状态
-    - updates: 每个节点执行后输出状态的增量更新 (推荐)
+    - updates: 每个节点执行后输出状态的增量更新，包含 token 统计
     - messages: 输出 LLM 消息流
-    - events: 输出所有事件，包括 LLM token 级别的流式输出 (最详细)
+    - events: 输出所有事件，包括 LLM token 级别的流式输出 (推荐用于文章生成)
+    
+    事件类型说明 (stream_mode=events):
+    - llm_start: LLM 开始生成
+    - llm_token: LLM 输出的每个 token（文章内容流式输出）
+    - llm_end: LLM 生成完成，包含 token 统计
+    - node_start/node_end: 节点开始/结束
+    - done: 工作流阶段完成，包含完整的 node_metrics
     """
     async def generate():
         try:
