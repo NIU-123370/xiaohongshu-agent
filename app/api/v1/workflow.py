@@ -1,12 +1,15 @@
 """
 工作流 API 接口模块
 提供启动、查看状态、恢复运行等核心接口
+支持SSE流式输出
 
 LangGraph 1.0+ 语法：使用 Command 模式恢复中断的工作流
 """
 import uuid
-from typing import Optional, Dict, Any, List, Literal
+import json
+from typing import Optional, Dict, Any, List, Literal, AsyncGenerator
 from fastapi import APIRouter, HTTPException, status
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from langgraph.types import Command
 import psycopg
@@ -509,3 +512,305 @@ async def delete_thread(thread_id: str) -> Dict[str, Any]:
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"删除线程失败: {str(e)}"
         )
+
+
+# ============== SSE 流式输出请求模型 ==============
+
+class StreamStartWorkflowRequest(BaseModel):
+    """流式启动工作流请求"""
+    topic_direction: str = Field(
+        ..., 
+        description="主题方向，例如：AI技术、Python开发",
+        min_length=1,
+        max_length=200
+    )
+    stream_mode: Literal["values", "updates", "messages", "events"] = Field(
+        default="updates",
+        description="流式输出模式: values(完整状态), updates(增量更新), messages(消息), events(所有事件)"
+    )
+
+
+class StreamResumeWorkflowRequest(BaseModel):
+    """流式恢复工作流请求"""
+    action: Literal["select_topic", "approve", "reject"] = Field(
+        ..., 
+        description="操作类型：select_topic(选择选题)、approve(通过审核)、reject(驳回)"
+    )
+    data: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="操作数据，select_topic时需要selected_topic，reject时需要feedback"
+    )
+    stream_mode: Literal["values", "updates", "messages", "events"] = Field(
+        default="updates",
+        description="流式输出模式: values(完整状态), updates(增量更新), messages(消息), events(所有事件)"
+    )
+
+
+# ============== SSE 流式输出 API (使用官方 graph.astream) ==============
+
+def format_sse_event(event_type: str, data: Any) -> str:
+    """
+    将事件格式化为SSE格式
+    
+    Args:
+        event_type: 事件类型
+        data: 事件数据
+        
+    Returns:
+        SSE格式字符串
+    """
+    payload = {
+        "type": event_type,
+        "data": data
+    }
+    return f"data: {json.dumps(payload, ensure_ascii=False, default=str)}\n\n"
+
+
+async def stream_graph_updates(
+    graph, 
+    input_data: Any, 
+    config: Dict[str, Any],
+    stream_mode: str = "updates"
+) -> AsyncGenerator[str, None]:
+    """
+    使用 LangGraph 官方 astream 方法流式输出工作流执行过程
+    
+    Args:
+        graph: 编译后的图
+        input_data: 输入数据 (初始状态或 Command)
+        config: 配置 (包含 thread_id)
+        stream_mode: 流式输出模式
+        
+    Yields:
+        SSE格式的事件字符串
+    """
+    try:
+        # 发送开始事件
+        yield format_sse_event("start", {"stream_mode": stream_mode})
+        
+        if stream_mode == "events":
+            # 使用 astream_events 获取详细事件（包括 LLM token 级别）
+            async for event in graph.astream_events(input_data, config, version="v2"):
+                event_kind = event.get("event", "")
+                event_name = event.get("name", "")
+                event_data = event.get("data", {})
+                
+                # 过滤和格式化关键事件
+                if event_kind == "on_chain_start":
+                    yield format_sse_event("node_start", {
+                        "node": event_name,
+                        "run_id": event.get("run_id", "")
+                    })
+                    
+                elif event_kind == "on_chain_end":
+                    yield format_sse_event("node_end", {
+                        "node": event_name,
+                        "output": event_data.get("output", {})
+                    })
+                    
+                elif event_kind == "on_chat_model_start":
+                    yield format_sse_event("llm_start", {
+                        "model": event_name,
+                        "run_id": event.get("run_id", "")
+                    })
+                    
+                elif event_kind == "on_chat_model_stream":
+                    # LLM token 级别的流式输出
+                    chunk = event_data.get("chunk", {})
+                    if hasattr(chunk, "content") and chunk.content:
+                        yield format_sse_event("llm_token", {
+                            "content": chunk.content
+                        })
+                        
+                elif event_kind == "on_chat_model_end":
+                    output = event_data.get("output", {})
+                    yield format_sse_event("llm_end", {
+                        "model": event_name,
+                        "output": str(output)[:500] if output else ""
+                    })
+                    
+        else:
+            # 使用标准 astream 方法
+            # stream_mode: "values" | "updates" | "messages"
+            async for chunk in graph.astream(input_data, config, stream_mode=stream_mode):
+                if stream_mode == "values":
+                    # values 模式：每次输出完整状态
+                    yield format_sse_event("state", dict(chunk))
+                    
+                elif stream_mode == "updates":
+                    # updates 模式：输出 {node_name: output} 格式
+                    for node_name, node_output in chunk.items():
+                        yield format_sse_event("update", {
+                            "node": node_name,
+                            "output": node_output
+                        })
+                        
+                elif stream_mode == "messages":
+                    # messages 模式：输出消息元组 (message, metadata)
+                    if isinstance(chunk, tuple) and len(chunk) >= 2:
+                        message, metadata = chunk[0], chunk[1]
+                        yield format_sse_event("message", {
+                            "content": str(message),
+                            "metadata": metadata
+                        })
+                    else:
+                        yield format_sse_event("message", {"content": str(chunk)})
+        
+        # 获取最终状态
+        final_state = await graph.aget_state(config)
+        interrupt_info = extract_interrupt_info(final_state)
+        next_nodes = list(final_state.next) if final_state.next else []
+        is_completed = len(next_nodes) == 0 and not interrupt_info
+        
+        # 发送完成事件
+        yield format_sse_event("done", {
+            "status": final_state.values.get("status", "unknown") if final_state.values else "unknown",
+            "next_nodes": next_nodes,
+            "is_completed": is_completed,
+            "interrupt_info": interrupt_info,
+            "values": dict(final_state.values) if final_state.values else {}
+        })
+        
+    except Exception as e:
+        # 发送错误事件
+        yield format_sse_event("error", {"message": str(e)})
+
+
+@router.post("/stream/start")
+async def stream_start_workflow(request: StreamStartWorkflowRequest):
+    """
+    流式启动工作流 (使用 LangGraph 官方 graph.astream)
+    
+    使用 Server-Sent Events (SSE) 实时返回工作流执行过程中的事件
+    
+    stream_mode 说明：
+    - values: 每个节点执行后输出完整的状态
+    - updates: 每个节点执行后输出状态的增量更新 (推荐)
+    - messages: 输出 LLM 消息流
+    - events: 输出所有事件，包括 LLM token 级别的流式输出 (最详细)
+    """
+    # 生成唯一的线程 ID
+    thread_id = str(uuid.uuid4())
+    
+    async def generate():
+        try:
+            # 获取编译后的图
+            graph = await get_graph()
+            
+            # 配置
+            config = {"configurable": {"thread_id": thread_id}}
+            
+            # 初始输入
+            initial_input = {
+                **INITIAL_STATE,
+                "topic_direction": request.topic_direction,
+                "status": "started",
+            }
+            
+            # 发送 thread_id 信息
+            yield format_sse_event("init", {"thread_id": thread_id})
+            
+            # 使用官方 astream 流式输出
+            async for event in stream_graph_updates(
+                graph, 
+                initial_input, 
+                config,
+                stream_mode=request.stream_mode
+            ):
+                yield event
+                
+        except Exception as e:
+            yield format_sse_event("error", {"message": str(e)})
+    
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no"
+        }
+    )
+
+
+@router.post("/stream/resume/{thread_id}")
+async def stream_resume_workflow(thread_id: str, request: StreamResumeWorkflowRequest):
+    """
+    流式恢复工作流 (使用 LangGraph 官方 graph.astream + Command)
+    
+    使用 Server-Sent Events (SSE) 实时返回工作流执行过程中的事件
+    
+    stream_mode 说明：
+    - values: 每个节点执行后输出完整的状态
+    - updates: 每个节点执行后输出状态的增量更新 (推荐)
+    - messages: 输出 LLM 消息流
+    - events: 输出所有事件，包括 LLM token 级别的流式输出 (最详细)
+    """
+    async def generate():
+        try:
+            # 获取编译后的图
+            graph = await get_graph()
+            
+            # 配置
+            config = {"configurable": {"thread_id": thread_id}}
+            
+            # 获取当前状态
+            current_state = await graph.aget_state(config)
+            
+            if current_state is None or current_state.values is None:
+                yield format_sse_event("error", {"message": f"未找到工作流: {thread_id}"})
+                return
+            
+            # 根据操作类型构建 resume 数据
+            resume_value: Dict[str, Any] = {}
+            
+            if request.action == "select_topic":
+                if not request.data or "selected_topic" not in request.data:
+                    yield format_sse_event("error", {"message": "选择选题需要提供 selected_topic"})
+                    return
+                resume_value = {
+                    "selected_topic": request.data["selected_topic"],
+                }
+                
+            elif request.action == "approve":
+                resume_value = {
+                    "action": "approve",
+                }
+                
+            elif request.action == "reject":
+                feedback = request.data.get("feedback", "") if request.data else ""
+                resume_value = {
+                    "action": "reject",
+                    "feedback": feedback,
+                }
+            
+            # 使用 Command 恢复工作流
+            resume_command = Command(resume=resume_value)
+            
+            # 发送恢复信息
+            yield format_sse_event("resume", {
+                "thread_id": thread_id,
+                "action": request.action
+            })
+            
+            # 使用官方 astream 流式输出
+            async for event in stream_graph_updates(
+                graph, 
+                resume_command, 
+                config,
+                stream_mode=request.stream_mode
+            ):
+                yield event
+                
+        except Exception as e:
+            yield format_sse_event("error", {"message": str(e)})
+    
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no"
+        }
+    )
