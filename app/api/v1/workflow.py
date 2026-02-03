@@ -37,13 +37,6 @@ class NodeMetricInfo(BaseModel):
     model: str = Field(default="", description="使用的模型")
 
 
-class TopicItemInfo(BaseModel):
-    """结构化选题项"""
-    title: str = Field(..., description="选题标题")
-    summary: str = Field(default="", description="选题摘要")
-    keywords: List[str] = Field(default=[], description="关键词标签")
-
-
 class StartWorkflowRequest(BaseModel):
     """启动工作流请求"""
     topic_direction: str = Field(
@@ -58,8 +51,7 @@ class StartWorkflowResponse(BaseModel):
     """启动工作流响应"""
     thread_id: str = Field(..., description="工作流线程ID")
     status: str = Field(..., description="当前状态")
-    generated_topics: List[str] = Field(default=[], description="生成的选题标题列表（兼容旧格式）")
-    generated_topics_structured: List[TopicItemInfo] = Field(default=[], description="生成的结构化选题列表")
+    generated_topics: List[str] = Field(default=[], description="生成的选题标题列表")
     message: str = Field(..., description="提示信息")
     interrupt_info: Optional[Dict[str, Any]] = Field(default=None, description="中断信息")
     node_metrics: List[NodeMetricInfo] = Field(default=[], description="节点执行指标")
@@ -144,13 +136,13 @@ async def start_workflow(request: StartWorkflowRequest) -> StartWorkflowResponse
     启动新的工作流（选题阶段：非流式 + 结构化输出 + token统计）
     
     接收主题方向，启动工作流并运行到第一个中断点（选题阶段）
-    返回结构化的选题列表（包含标题、摘要、关键词）
+    返回生成的5个选题标题
     
     Args:
         request: 包含 topic_direction 的请求体
         
     Returns:
-        包含 thread_id 和生成的结构化选题列表
+        包含 thread_id 和生成的选题列表
     """
     try:
         # 生成唯一的线程 ID
@@ -183,22 +175,10 @@ async def start_workflow(request: StartWorkflowRequest) -> StartWorkflowResponse
         state_snapshot = await graph.aget_state(config)
         interrupt_info = extract_interrupt_info(state_snapshot)
         
-        # 获取生成的选题（兼容旧格式）
+        # 获取生成的选题
         generated_topics = result.get("generated_topics", [])
-        # 获取结构化选题
-        generated_topics_structured = result.get("generated_topics_structured", [])
         current_status = result.get("status", "unknown")
         node_metrics = result.get("node_metrics", [])
-        
-        # 转换为响应模型
-        structured_topics = [
-            TopicItemInfo(
-                title=topic.get("title", ""),
-                summary=topic.get("summary", ""),
-                keywords=topic.get("keywords", [])
-            )
-            for topic in generated_topics_structured
-        ]
         
         # 记录阶段变化
         app_logger.workflow_stage_changed(
@@ -211,7 +191,6 @@ async def start_workflow(request: StartWorkflowRequest) -> StartWorkflowResponse
             thread_id=thread_id,
             status=current_status,
             generated_topics=generated_topics,
-            generated_topics_structured=structured_topics,
             message="工作流已启动，请选择一个选题继续",
             interrupt_info=interrupt_info,
             node_metrics=node_metrics

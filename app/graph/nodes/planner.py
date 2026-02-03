@@ -14,15 +14,13 @@ async def plan_topics_node(state: AgentState) -> Dict[str, Any]:
     选题规划节点（结构化输出 + 非流式）
     
     根据用户输入的主题方向，调用 LLM 生成候选选题列表
-    返回结构化的选题数据（包含标题、摘要、关键词）
     
     Args:
         state: 当前工作流状态
         
     Returns:
         更新后的状态字段，包含：
-        - generated_topics: 选题标题列表（兼容旧格式）
-        - generated_topics_structured: 结构化选题列表
+        - generated_topics: 选题标题列表（5个）
         - node_metrics: 节点执行指标（包含 token 统计）
     """
     topic_direction = state.get("topic_direction", "")
@@ -44,22 +42,11 @@ async def plan_topics_node(state: AgentState) -> Dict[str, Any]:
                 model=usage_info.model
             ))
             
-            # 提取标题列表（兼容旧格式）
+            # 提取标题列表
             generated_topics = [topic.title for topic in topics_response.topics]
-            
-            # 转换为字典列表（结构化格式）
-            generated_topics_structured = [
-                {
-                    "title": topic.title,
-                    "summary": topic.summary,
-                    "keywords": topic.keywords
-                }
-                for topic in topics_response.topics
-            ]
             
             result = {
                 "generated_topics": generated_topics,
-                "generated_topics_structured": generated_topics_structured,
                 "status": "topics_generated",
                 "error": "",
             }
@@ -67,7 +54,6 @@ async def plan_topics_node(state: AgentState) -> Dict[str, Any]:
         except Exception as e:
             result = {
                 "generated_topics": [],
-                "generated_topics_structured": [],
                 "status": "error",
                 "error": f"生成选题失败: {str(e)}",
             }

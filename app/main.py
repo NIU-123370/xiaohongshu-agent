@@ -15,6 +15,7 @@ from typing import AsyncGenerator
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
 from app.core.config import settings
 from app.core.db import init_db, close_db
@@ -134,6 +135,11 @@ app.add_middleware(
 # 注册路由
 app.include_router(workflow_router, prefix="/api/v1")
 app.include_router(image_router, prefix="/api/v1")
+
+# 挂载静态文件目录（用于访问生成的图片）
+static_dir = Path(__file__).parent.parent / "static"
+static_dir.mkdir(parents=True, exist_ok=True)
+app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
 
 
 @app.get("/")

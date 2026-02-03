@@ -101,6 +101,18 @@
       {{ message }}
     </div>
 
+    <!-- 当前工作流信息（步骤0以外时显示主题方向） -->
+    <div v-if="currentStep > 0 && topicDirection" class="current-workflow-info">
+      <div class="workflow-info-item">
+        <span class="workflow-info-label">主题方向：</span>
+        <span class="workflow-info-value">{{ topicDirection }}</span>
+      </div>
+      <div v-if="selectedTopic" class="workflow-info-item">
+        <span class="workflow-info-label">已选选题：</span>
+        <span class="workflow-info-value">{{ selectedTopic }}</span>
+      </div>
+    </div>
+
     <!-- 步骤 0: 输入主题 -->
     <div v-if="currentStep === 0" class="card">
       <div class="card-title">输入主题方向</div>
@@ -124,7 +136,7 @@
     <!-- 步骤 1: 选择选题 -->
     <div v-if="currentStep === 1" class="card">
       <div class="card-title">请选择一个选题</div>
-      <!-- 流式生成中：显示实时内容（非结构化输出时使用） -->
+      <!-- 流式生成中：显示实时内容 -->
       <div v-if="loading && streamingTopicsText" class="streaming-content">
         <div class="streaming-label">AI 正在生成选题...</div>
         <div class="streaming-text">
@@ -133,45 +145,22 @@
         </div>
       </div>
       <!-- 加载中但还没有内容 -->
-      <div v-else-if="loading && generatedTopicsStructured.length === 0 && generatedTopics.length === 0 && !streamingTopicsText" class="loading">
+      <div v-else-if="loading && generatedTopics.length === 0 && !streamingTopicsText" class="loading">
         <div class="loading-spinner"></div>
         <p style="margin-top: 12px;">AI 正在生成选题...</p>
       </div>
-      <!-- 已生成选题列表 - 结构化展示 -->
+      <!-- 已生成选题列表 -->
       <div v-else class="topic-list">
-        <!-- 优先使用结构化选题数据 -->
-        <template v-if="generatedTopicsStructured.length > 0">
-          <div 
-            v-for="(topic, index) in generatedTopicsStructured" 
-            :key="index"
-            class="topic-item-structured"
-            :class="{ selected: selectedTopic === topic.title }"
-            @click="selectedTopic = topic.title"
-          >
-            <div class="topic-title">{{ topic.title }}</div>
-            <div class="topic-summary" v-if="topic.summary">{{ topic.summary }}</div>
-            <div class="topic-keywords" v-if="topic.keywords && topic.keywords.length > 0">
-              <span 
-                v-for="(keyword, kIndex) in topic.keywords" 
-                :key="kIndex"
-                class="topic-keyword-tag"
-              >{{ keyword }}</span>
-            </div>
-          </div>
-        </template>
-        <!-- 兼容旧格式：仅显示标题 -->
-        <template v-else>
-          <div 
-            v-for="(topic, index) in generatedTopics" 
-            :key="index"
-            class="topic-item"
-            :class="{ selected: selectedTopic === topic }"
-            @click="selectedTopic = topic"
-          >
-            {{ topic }}
-          </div>
-        </template>
-        <div v-if="loading && (generatedTopics.length > 0 || generatedTopicsStructured.length > 0)" class="loading-small" style="margin-top: 12px;">
+        <div 
+          v-for="(topic, index) in generatedTopics" 
+          :key="index"
+          class="topic-item"
+          :class="{ selected: selectedTopic === topic }"
+          @click="selectedTopic = topic"
+        >
+          {{ topic }}
+        </div>
+        <div v-if="loading && generatedTopics.length > 0" class="loading-small" style="margin-top: 12px;">
           <div class="loading-spinner-small"></div>
           <span style="margin-left: 8px; color: #666;">正在生成更多选题...</span>
         </div>
@@ -233,9 +222,21 @@
     <!-- 步骤 3: 生成配图中 -->
     <div v-if="currentStep === 3" class="card">
       <div class="card-title">正在生成配图</div>
+      
+      <!-- 显示配图摘要（视觉要点） -->
+      <div v-if="visualPoints.length > 0" class="visual-summary">
+        <div class="visual-summary-title">配图摘要（AI 提取的视觉要点）</div>
+        <ul class="visual-summary-list">
+          <li v-for="(point, index) in visualPoints" :key="index">
+            <span class="visual-point-index">{{ index + 1 }}</span>
+            <span class="visual-point-text">{{ point }}</span>
+          </li>
+        </ul>
+      </div>
+      
       <div class="loading">
         <div class="loading-spinner"></div>
-        <p style="margin-top: 12px;">AI 正在根据文章内容生成配图...</p>
+        <p style="margin-top: 12px;">AI 正在根据配图摘要生成图片...</p>
       </div>
     </div>
 
@@ -271,7 +272,7 @@
       </div>
     </div>
 
-    <!-- 节点执行指标面板 -->
+    <!-- 节点执行指标面板 - 有数据就显示 -->
     <div v-if="nodeMetrics.length > 0" class="card">
       <div class="metrics-panel">
         <div class="metrics-panel-title">节点执行指标</div>
@@ -525,8 +526,7 @@ const interruptInfo = ref(null)
 
 // 步骤数据
 const topicDirection = ref('')
-const generatedTopics = ref([])  // 兼容旧格式：仅标题列表
-const generatedTopicsStructured = ref([])  // 新结构化格式：包含标题、摘要、关键词
+const generatedTopics = ref([])  // 选题标题列表
 const selectedTopic = ref('')
 const streamingTopicsText = ref('') // 流式生成选题时的实时文本
 const articleContent = ref('')
@@ -586,7 +586,6 @@ async function handleStart() {
   loading.value = true
   message.value = ''
   generatedTopics.value = []
-  generatedTopicsStructured.value = []  // 重置结构化选题
   streamingTopicsText.value = '' // 重置流式文本
   
   // 立即切换到步骤1，这样用户才能看到加载状态
@@ -638,11 +637,6 @@ async function handleStart() {
         // 子图名称是 topic_selection，内部包含 plan_topics 节点
         // updates 模式下返回的是子图名称
         if (node === 'topic_selection' || node === 'plan_topics' || node.includes('plan_topics')) {
-          // 优先使用结构化选题
-          if (output.generated_topics_structured?.length > 0) {
-            generatedTopicsStructured.value = output.generated_topics_structured
-          }
-          // 兼容旧格式
           if (output.generated_topics?.length > 0) {
             generatedTopics.value = output.generated_topics
           }
@@ -661,21 +655,12 @@ async function handleStart() {
         workflowStatus.value = data.status
         interruptInfo.value = data.interrupt_info
         
-        // 从 interrupt_info 中获取结构化选题（选题阶段中断时数据在这里）
-        if (data.interrupt_info?.options_structured?.length > 0) {
-          generatedTopicsStructured.value = data.interrupt_info.options_structured
-        }
-        // 从 interrupt_info 中获取选题列表（兼容旧格式）
+        // 从 interrupt_info 中获取选题列表
         if (data.interrupt_info?.options?.length > 0 && generatedTopics.value.length === 0) {
           generatedTopics.value = data.interrupt_info.options
         }
         
         // 使用最终状态的选题列表
-        // 优先使用结构化选题
-        if (data.values?.generated_topics_structured?.length > 0) {
-          generatedTopicsStructured.value = data.values.generated_topics_structured
-        }
-        // 兼容旧格式
         if (data.values?.generated_topics?.length > 0) {
           generatedTopics.value = data.values.generated_topics
         }
@@ -935,7 +920,6 @@ function handleReset() {
   interruptInfo.value = null
   topicDirection.value = ''
   generatedTopics.value = []
-  generatedTopicsStructured.value = []  // 重置结构化选题
   selectedTopic.value = ''
   streamingTopicsText.value = ''
   articleContent.value = ''
@@ -985,13 +969,30 @@ async function handleSwitchThread(targetThreadId) {
     const values = state.values || {}
     topicDirection.value = values.topic_direction || ''
     generatedTopics.value = values.generated_topics || []
-    generatedTopicsStructured.value = values.generated_topics_structured || []  // 加载结构化选题
     selectedTopic.value = values.selected_topic || ''
     articleContent.value = values.article_content || ''
     imageUrls.value = values.image_urls || []
     visualPoints.value = values.visual_points || []
-    nodeMetrics.value = state.node_metrics || values.node_metrics || []
     feedback.value = ''
+    
+    // 清空临时状态
+    streamingTopicsText.value = ''
+    streamLogs.value = []  // 清空流式日志
+    
+    // 从 state.node_metrics 或 values.node_metrics 获取指标
+    // 注意：后端返回的 node_metrics 可能是 NodeMetricInfo 对象数组
+    const rawMetrics = state.node_metrics || values.node_metrics || []
+    // 确保转换为普通对象数组
+    nodeMetrics.value = rawMetrics.map(m => ({
+      node_name: m.node_name || '',
+      duration_ms: m.duration_ms || 0,
+      input_tokens: m.input_tokens || 0,
+      output_tokens: m.output_tokens || 0,
+      total_tokens: m.total_tokens || 0,
+      start_time: m.start_time || '',
+      end_time: m.end_time || '',
+      model: m.model || ''
+    }))
     
     // 根据状态判断当前步骤
     currentStep.value = determineCurrentStep(state)

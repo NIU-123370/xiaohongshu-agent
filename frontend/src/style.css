@@ -952,6 +952,105 @@ body {
   font-size: 14px;
 }
 
+/* ========== 当前工作流信息 ========== */
+.current-workflow-info {
+  background: linear-gradient(135deg, #e6f4ff 0%, #f0f5ff 100%);
+  border: 1px solid #91caff;
+  border-radius: 8px;
+  padding: 12px 16px;
+  margin-bottom: 16px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+}
+
+.workflow-info-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.workflow-info-label {
+  font-size: 13px;
+  color: #666;
+  font-weight: 500;
+}
+
+.workflow-info-value {
+  font-size: 14px;
+  color: #1a1a1a;
+  font-weight: 600;
+  background: #fff;
+  padding: 4px 12px;
+  border-radius: 4px;
+  border: 1px solid #d6e4ff;
+}
+
+/* ========== 配图摘要/视觉要点 ========== */
+.visual-summary {
+  background: linear-gradient(135deg, #f6ffed 0%, #fcffe6 100%);
+  border: 1px solid #b7eb8f;
+  border-radius: 8px;
+  padding: 16px;
+  margin-bottom: 20px;
+}
+
+.visual-summary-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: #389e0d;
+  margin-bottom: 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.visual-summary-title::before {
+  content: '🎨';
+}
+
+.visual-summary-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.visual-summary-list li {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 10px 12px;
+  background: #fff;
+  border-radius: 6px;
+  margin-bottom: 8px;
+  border: 1px solid #d9f7be;
+}
+
+.visual-summary-list li:last-child {
+  margin-bottom: 0;
+}
+
+.visual-point-index {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  background: #52c41a;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.visual-point-text {
+  font-size: 14px;
+  color: #333;
+  line-height: 1.6;
+  flex: 1;
+}
+
 /* 响应式处理 */
 @media (max-width: 768px) {
   .sidebar {
@@ -984,5 +1083,10 @@ body {
   .stream-log-stats {
     flex-wrap: wrap;
     gap: 12px;
+  }
+  
+  .current-workflow-info {
+    flex-direction: column;
+    gap: 8px;
   }
 }

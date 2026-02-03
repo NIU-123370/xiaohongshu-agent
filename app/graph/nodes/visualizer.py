@@ -66,7 +66,7 @@ async def generate_images_node(state: AgentState) -> Dict[str, Any]:
     """
     生成配图节点
     
-    根据视觉要点生成配图
+    根据视觉要点生成配图（部分失败时仍会返回成功的图片）
     
     Args:
         state: 当前工作流状态
@@ -80,8 +80,8 @@ async def generate_images_node(state: AgentState) -> Dict[str, Any]:
     if not visual_points:
         return {
             "image_urls": [],
-            "status": "error",
-            "error": "视觉要点为空，无法生成配图",
+            "status": "completed",  # 改为 completed，不阻塞工作流
+            "error": "视觉要点为空，跳过配图生成",
         }
     
     with MetricsContext("generate_images") as tracker:
@@ -90,17 +90,24 @@ async def generate_images_node(state: AgentState) -> Dict[str, Any]:
             image_service = get_image_service()
             image_urls = await image_service.generate_images(visual_points)
             
+            # 即使部分图片生成失败，也标记为完成
+            if len(image_urls) < len(visual_points):
+                error_msg = f"部分配图生成失败 ({len(image_urls)}/{len(visual_points)} 成功)"
+            else:
+                error_msg = ""
+            
             result = {
                 "image_urls": image_urls,
                 "status": "completed",
-                "error": "",
+                "error": error_msg,
             }
             
         except Exception as e:
+            # 即使全部失败，也标记为完成（不阻塞工作流）
             result = {
                 "image_urls": [],
-                "status": "error",
-                "error": f"生成配图失败: {str(e)}",
+                "status": "completed",
+                "error": f"配图生成失败: {str(e)[:100]}",
             }
     
     # 在 with 块结束后（tracker.stop() 已被调用），再获取指标

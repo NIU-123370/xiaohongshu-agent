@@ -28,33 +28,21 @@ async def human_select_topic_node(state: AgentState) -> Command[Literal["__end__
         Command 对象，包含状态更新，goto END 结束子图
     """
     generated_topics = state.get("generated_topics", [])
-    generated_topics_structured = state.get("generated_topics_structured", [])
     
     # 使用 interrupt 暂停，等待用户选择
     # 用户通过 update_state 提供 selected_topic 后，workflow resume
-    # 中断信息包含结构化选题数据
     user_input = interrupt({
         "message": "请从以下选题中选择一个",
-        "options": generated_topics,  # 兼容旧格式
-        "options_structured": generated_topics_structured,  # 新结构化格式
+        "options": generated_topics,
         "action_required": "select_topic"
     })
     
     # 当用户通过 Command 恢复时，user_input 包含用户的选择
     selected_topic = user_input.get("selected_topic", "") if isinstance(user_input, dict) else ""
     
-    # 如果用户选择了某个选题，尝试查找对应的摘要
-    selected_topic_summary = ""
-    if selected_topic and generated_topics_structured:
-        for topic in generated_topics_structured:
-            if topic.get("title") == selected_topic:
-                selected_topic_summary = topic.get("summary", "")
-                break
-    
     return Command(
         update={
             "selected_topic": selected_topic,
-            "selected_topic_summary": selected_topic_summary,
             "status": "topic_selected",
         },
         goto=END  # 结束子图，返回主图
