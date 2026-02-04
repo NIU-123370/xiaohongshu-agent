@@ -31,8 +31,8 @@ async def plan_topics_node(state: AgentState) -> Dict[str, Any]:
             # 获取 LLM 服务
             llm_service = get_llm_service()
             
-            # 使用带准确 token 统计的结构化输出方法
-            topics_response, usage_info = await llm_service.plan_topics_with_accurate_usage(topic_direction)
+            # 使用结构化输出方法
+            topics_response, usage_info = await llm_service.plan_topics(topic_direction)
             
             # 记录 LLM 使用信息
             tracker.set_llm_usage(LLMUsage(

@@ -18,27 +18,6 @@ from app.graph.utils import get_checkpointer
 from app.graph.subgraphs.topic_selection import get_compiled_topic_selection_subgraph
 
 
-def should_continue_after_review(state: AgentState) -> Literal["extract_visuals", "write_draft"]:
-    """
-    审稿后的条件路由
-    
-    根据审核状态决定是继续生成配图还是回退重写
-    
-    Args:
-        state: 当前工作流状态
-        
-    Returns:
-        下一个节点名称
-    """
-    review_status = state.get("review_status", "pending")
-    
-    if review_status == "approved":
-        return "extract_visuals"
-    else:
-        # rejected 或 pending 都回到写作节点
-        return "write_draft"
-
-
 async def human_review_node(state: AgentState) -> Command[Literal["extract_visuals", "write_draft"]]:
     """
     人工审稿节点 (使用 LangGraph 1.0+ interrupt 模式)
