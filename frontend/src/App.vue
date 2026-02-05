@@ -1,5 +1,59 @@
 <template>
-  <div class="app-layout">
+  <!-- 登录/注册页面 -->
+  <div v-if="!isLoggedIn" class="auth-page">
+    <div class="auth-container">
+      <div class="auth-card">
+        <h2>{{ isLoginMode ? '登录' : '注册' }}</h2>
+        <form @submit.prevent="handleAuth">
+          <div class="form-group">
+            <label>用户名</label>
+            <input 
+              v-model="authForm.username" 
+              type="text" 
+              class="input"
+              placeholder="请输入用户名（至少3个字符）"
+              required 
+              minlength="3"
+            />
+          </div>
+          <div class="form-group">
+            <label>密码</label>
+            <input 
+              v-model="authForm.password" 
+              type="password" 
+              class="input"
+              placeholder="请输入密码（至少6个字符）"
+              required 
+              minlength="6"
+            />
+          </div>
+          <div v-if="authError" class="auth-error">
+            {{ authError }}
+          </div>
+          <button 
+            type="submit" 
+            class="btn btn-primary auth-btn"
+            :disabled="authLoading"
+          >
+            {{ authLoading ? '处理中...' : (isLoginMode ? '登录' : '注册') }}
+          </button>
+        </form>
+        <div class="auth-switch">
+          <span v-if="isLoginMode">
+            还没有账号？
+            <a href="#" @click.prevent="isLoginMode = false">立即注册</a>
+          </span>
+          <span v-else>
+            已有账号？
+            <a href="#" @click.prevent="isLoginMode = true">立即登录</a>
+          </span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 主应用页面 -->
+  <div v-else class="app-layout">
     <!-- 历史记录侧边栏 -->
     <div class="sidebar" :class="{ collapsed: !sidebarOpen }">
       <div class="sidebar-header">
@@ -66,8 +120,16 @@
       <div class="container">
         <!-- 头部 -->
         <div class="header">
-          <h1>AI 内容运营助手</h1>
-          <p>基于 LangGraph 的智能内容生成工作流</p>
+          <div class="header-top">
+            <div>
+              <h1>AI 内容运营助手</h1>
+              <p>基于 LangGraph 的智能内容生成工作流</p>
+            </div>
+            <div class="user-info">
+              <span class="username">{{ currentUsername }}</span>
+              <button class="btn btn-logout" @click="handleLogout">退出登录</button>
+            </div>
+          </div>
         </div>
 
     <!-- 工作流进度条 -->
@@ -407,7 +469,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, nextTick } from 'vue'
+import { ref, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import { 
   startWorkflow, 
   getWorkflowState, 
@@ -420,8 +482,102 @@ import {
   streamStartWorkflow,
   streamSelectTopic,
   streamApproveArticle,
-  streamRejectArticle
+  streamRejectArticle,
+  // 认证相关
+  login,
+  register,
+  logout,
+  isLoggedIn as checkLoggedIn,
+  getCurrentUser
 } from './api.js'
+
+// ============== 认证状态 ==============
+const isLoggedIn = ref(false)
+const isLoginMode = ref(true)
+const authLoading = ref(false)
+const authError = ref('')
+const currentUsername = ref('')
+const authForm = ref({
+  username: '',
+  password: ''
+})
+
+// 检查登录状态
+async function checkAuth() {
+  if (checkLoggedIn()) {
+    try {
+      const user = await getCurrentUser()
+      currentUsername.value = user.username
+      isLoggedIn.value = true
+    } catch (e) {
+      isLoggedIn.value = false
+    }
+  }
+}
+
+// 处理登录/注册
+async function handleAuth() {
+  authError.value = ''
+  authLoading.value = true
+  
+  try {
+    if (isLoginMode.value) {
+      // 登录
+      await login(authForm.value.username, authForm.value.password)
+      const user = await getCurrentUser()
+      currentUsername.value = user.username
+      isLoggedIn.value = true
+      // 清空表单
+      authForm.value = { username: '', password: '' }
+    } else {
+      // 注册
+      await register(authForm.value.username, authForm.value.password)
+      // 注册成功后自动登录
+      await login(authForm.value.username, authForm.value.password)
+      const user = await getCurrentUser()
+      currentUsername.value = user.username
+      isLoggedIn.value = true
+      // 清空表单
+      authForm.value = { username: '', password: '' }
+    }
+  } catch (e) {
+    authError.value = e.response?.data?.detail || e.message || '操作失败'
+  } finally {
+    authLoading.value = false
+  }
+}
+
+// 登出
+function handleLogout() {
+  logout()
+  isLoggedIn.value = false
+  currentUsername.value = ''
+  // 重置工作流状态
+  handleReset()
+  threadList.value = []
+}
+
+// 监听 401 事件
+function onAuthLogout() {
+  isLoggedIn.value = false
+  currentUsername.value = ''
+}
+
+onMounted(() => {
+  checkAuth()
+  window.addEventListener('auth:logout', onAuthLogout)
+})
+
+onUnmounted(() => {
+  window.removeEventListener('auth:logout', onAuthLogout)
+})
+
+// 登录后获取历史记录
+watch(isLoggedIn, (newVal) => {
+  if (newVal) {
+    fetchThreadList()
+  }
+})
 
 // 侧边栏状态
 const sidebarOpen = ref(true)
@@ -564,10 +720,8 @@ function getNodeDisplayName(nodeName) {
   return nameMap[nodeName] || nodeName
 }
 
-// 页面加载时获取历史记录
-onMounted(() => {
-  fetchThreadList()
-})
+// 页面加载时获取历史记录（在 checkAuth 之后）
+// 已移动到 watch isLoggedIn
 
 // 显示消息
 function showMessage(msg, type = 'info') {

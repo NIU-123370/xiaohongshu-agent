@@ -20,6 +20,11 @@ pydantic>=2.12.5
 pydantic-settings>=2.7.1
 python-dotenv>=1.2.1
 
+# Authentication (JWT)
+python-jose[cryptography]>=3.3.0
+passlib[bcrypt]>=1.7.4
+argon2-cffi>=25.1.0
+
 # Logging (?????)
 structlog>=24.1.0
 

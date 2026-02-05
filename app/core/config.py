@@ -46,6 +46,11 @@ class Settings(BaseSettings):
     # 是否启用 PII 脱敏（邮箱、信用卡、API Key、手机号）
     log_pii_anonymize: bool = True
     
+    # ============== JWT 认证配置 ==============
+    jwt_secret_key: str = "your-super-secret-key-change-in-production-2024"
+    jwt_algorithm: str = "HS256"
+    jwt_expire_minutes: int = 1440  # 24小时
+    
     @property
     def async_database_url(self) -> str:
         """获取异步数据库 URL"""
